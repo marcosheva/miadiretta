@@ -5,7 +5,9 @@
   "main": "inspect_db.js",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "client": "vite",
+    "server": "cd backend && npm start",
     "build": "cd backend && npm install && cd .. && vite build",
     "serve": "vite preview"
   },
@@ -17,6 +19,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.4",
+    "concurrently": "^9.2.1",
     "vite": "^4.5.14"
   }
 }

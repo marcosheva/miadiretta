@@ -70,9 +70,11 @@ const pinnedLeagues = [
 const fetchLeagues = async () => {
   try {
     const res = await axios.get('/api/leagues');
-    leagueGroups.value = res.data;
+    // Ensure we always have an array
+    leagueGroups.value = Array.isArray(res.data) ? res.data : [];
   } catch (err) {
     console.error('Error fetching leagues:', err);
+    leagueGroups.value = []; // Set to empty array on error
   }
 };
 

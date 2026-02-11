@@ -251,6 +251,8 @@ app.get('/api/sync', async (req, res) => {
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+  }).on('error', (err) => {
+    console.error('Server failed to start:', err);
   });
 }
 

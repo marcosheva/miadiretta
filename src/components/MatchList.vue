@@ -65,11 +65,11 @@ const fetchMatches = async () => {
     }
     
     const response = await axios.get('/api/matches', { params });
-    // Remove console.log in production
-    // console.log('Matches loaded:', response.data.length); 
-    matches.value = response.data;
+    // Ensure we always have an array
+    matches.value = Array.isArray(response.data) ? response.data : [];
   } catch (err) {
     console.error('Error fetching matches:', err);
+    matches.value = []; // Set to empty array on error
   } finally {
     loading.value = false;
   }
