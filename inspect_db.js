@@ -1,7 +1,12 @@
+require('dotenv').config({ path: './backend/.env' });
 const { MongoClient } = require('mongodb');
 
 async function main() {
-    const uri = "mongodb+srv://bet365odds:Aurora86@cluster0.svytet0.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
+    const uri = process.env.MONGODB_URI;
+    if (!uri) {
+        console.error("Error: MONGODB_URI not found in backend/.env");
+        process.exit(1);
+    }
     const client = new MongoClient(uri);
 
     try {

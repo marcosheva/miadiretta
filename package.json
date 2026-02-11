@@ -1,37 +1,21 @@
 {
-<<<<<<< HEAD
   "name": "diretta",
   "version": "1.0.0",
   "description": "",
   "main": "inspect_db.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-=======
-  "name": "frontend",
-  "version": "1.0.0",
-  "description": "",
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "echo \"Error: no test specified\" && exit 1"
     "build": "vite build",
-     "serve": "vite preview",
->>>>>>> 390b3936bf068b064a0a749061662d7b4c058c4d
+    "serve": "vite preview"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-<<<<<<< HEAD
-  "type": "commonjs",
   "dependencies": {
-    "mongodb": "^7.1.0"
-=======
-  "dependencies": {
-    "@vitejs/plugin-vue": "^6.0.4",
-    "axios": "^1.13.5",
-    "lucide-vue-next": "^0.563.0",
-    "vite": "^7.3.1",
-    "vue": "^3.5.28"
->>>>>>> 390b3936bf068b064a0a749061662d7b4c058c4d
+    "vue": "^3.3.4",
+    "mongodb": "^7.1.0",
+    "lucide-vue-next": "^0.3.0"
+  },
+  "devDependencies": {
+    "vite": "^4.5.14",
+    "@vitejs/plugin-vue": "^6.0.4"
   }
 }

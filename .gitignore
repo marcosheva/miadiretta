@@ -4,3 +4,7 @@ node_modules/
 dist/
 coverage/
 .vscode/
+miomongo.txt
+*.log
+Thumbs.db
+.idea/
