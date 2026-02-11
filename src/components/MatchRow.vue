@@ -1,5 +1,5 @@
 <template>
-  <div class="match-row animate-fade-in" @click="$emit('select', match)">
+  <div class="match-row animate-fade-in" :class="{ 'goal-flash': highlight }" @click="$emit('select', match)">
     <div class="match-time-status">
       <div :class="['match-status', { live: match.status === 'LIVE' }]">
         <span v-if="match.status === 'LIVE'" class="live-minute">{{ match.minute }}</span>
@@ -50,7 +50,12 @@
 
 <script setup>
 const props = defineProps({
-  match: Object
+  match: Object,
+  // true quando c'è stato un gol recente su questo match
+  highlight: {
+    type: Boolean,
+    default: false
+  }
 });
 
 defineEmits(['select']);
@@ -88,6 +93,30 @@ const isWinner = (s1, s2) => s1 > s2;
   border-bottom: 1px solid var(--border);
   transition: all 0.2s ease;
   cursor: pointer;
+}
+
+.goal-flash {
+  animation: goalFlash 0.6s ease-in-out 4;
+  border-color: var(--live);
+  box-shadow: 0 0 12px rgba(231, 76, 60, 0.4);
+}
+
+@keyframes goalFlash {
+  0% {
+    background: var(--bg-card);
+  }
+  25% {
+    background: rgba(231, 76, 60, 0.25);
+  }
+  50% {
+    background: var(--bg-card);
+  }
+  75% {
+    background: rgba(231, 76, 60, 0.25);
+  }
+  100% {
+    background: var(--bg-card);
+  }
 }
 
 .match-row:hover {

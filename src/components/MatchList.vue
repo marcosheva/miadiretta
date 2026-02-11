@@ -12,7 +12,8 @@
       <MatchRow 
         v-for="match in group.matches" 
         :key="match._id" 
-        :match="match" 
+        :match="match"
+        :highlight="!!goalHighlights[match._id]"
         @select="$emit('select-match', $event)"
       />
     </div>
@@ -45,6 +46,41 @@ const matches = ref([]);
 const loading = ref(true);
 const favorites = ref(JSON.parse(localStorage.getItem('favoriteLeagues') || '[]'));
 
+// Storico dei punteggi per rilevare nuovi gol
+const lastScores = ref({});
+// Match che hanno avuto un gol recente (per evidenziarli)
+const goalHighlights = ref({});
+
+// Audio semplice per il gol (beep breve)
+let audioCtx = null;
+const playGoalSound = () => {
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+
+    if (!audioCtx) {
+      audioCtx = new AudioContextClass();
+    }
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+
+    gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.4);
+  } catch (e) {
+    // in caso di errore (ad es. browser che blocca l'audio), ignora
+  }
+};
+
 const toggleFavorite = (leagueName) => {
   if (favorites.value.includes(leagueName)) {
     favorites.value = favorites.value.filter(l => l !== leagueName);
@@ -52,6 +88,47 @@ const toggleFavorite = (leagueName) => {
     favorites.value.push(leagueName);
   }
   localStorage.setItem('favoriteLeagues', JSON.stringify(favorites.value));
+};
+
+const detectGoals = (newMatches) => {
+  const newLastScores = { ...lastScores.value };
+  const newHighlights = { ...goalHighlights.value };
+
+  newMatches.forEach((m) => {
+    if (!m || !m._id || !m.homeTeam || !m.awayTeam) return;
+
+    const prev = lastScores.value[m._id];
+    const currentHome = Number(m.homeTeam.score ?? 0);
+    const currentAway = Number(m.awayTeam.score ?? 0);
+
+    // Se la partita è live e uno dei due punteggi è aumentato, evidenzia
+    if (
+      m.status === 'LIVE' &&
+      prev &&
+      (currentHome > prev.home || currentAway > prev.away)
+    ) {
+      newHighlights[m._id] = true;
+
+      // Suono per il nuovo gol
+      playGoalSound();
+
+      // Rimuovi l'evidenziazione dopo qualche secondo
+      setTimeout(() => {
+        goalHighlights.value = {
+          ...goalHighlights.value,
+          [m._id]: false
+        };
+      }, 12000);
+    }
+
+    newLastScores[m._id] = {
+      home: currentHome,
+      away: currentAway
+    };
+  });
+
+  lastScores.value = newLastScores;
+  goalHighlights.value = newHighlights;
 };
 
 const fetchMatches = async () => {
@@ -66,8 +143,12 @@ const fetchMatches = async () => {
     }
     
     const response = await axios.get(`${API_URL}/api/matches`, { params });
-    // Ensure we always have an array
-    matches.value = Array.isArray(response.data) ? response.data : [];
+    const data = Array.isArray(response.data) ? response.data : [];
+
+    // Prima di aggiornare la lista, controlla se ci sono nuovi gol
+    detectGoals(data);
+
+    matches.value = data;
   } catch (err) {
     console.error('Error fetching matches:', err);
     matches.value = []; // Set to empty array on error
