@@ -80,7 +80,7 @@ const fetchDetails = async () => {
   if (!props.match.eventId) return;
   loading.value = true;
   try {
-    const res = await axios.get(`/api/matches/${props.match.eventId}`);
+    const res = await axios.get(`/api/match/${props.match.eventId}`);
     fullMatch.value = res.data;
   } catch (e) {
     console.error('Error fetching match details:', e);
