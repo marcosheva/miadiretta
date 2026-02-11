@@ -1,14 +1,4 @@
 {
-    "rewrites": [
-        {
-            "source": "/api/(.*)",
-            "destination": "/backend/server.js"
-        }
-    ],
-    "routes": [
-        {
-            "src": "/(.*)",
-            "dest": "/index.html"
-        }
-    ]
+    "buildCommand": "cd backend && npm install && cd .. && vite build",
+    "outputDirectory": "dist"
 }
