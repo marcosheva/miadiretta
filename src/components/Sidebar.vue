@@ -49,6 +49,7 @@
 <script setup>
 import { ref, onMounted } from 'vue';
 import { Circle, Activity, Target, ChevronRight, Pin, Globe } from 'lucide-vue-next';
+import API_URL from '../config/api';
 import axios from 'axios';
 
 const leagueGroups = ref([]);
@@ -69,7 +70,7 @@ const pinnedLeagues = [
 
 const fetchLeagues = async () => {
   try {
-    const res = await axios.get('/api/leagues');
+    const res = await axios.get(`${API_URL}/api/leagues`);
     // Ensure we always have an array
     leagueGroups.value = Array.isArray(res.data) ? res.data : [];
   } catch (err) {

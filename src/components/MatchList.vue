@@ -28,6 +28,7 @@ import { ref, onMounted, computed, watch } from 'vue';
 import axios from 'axios';
 import { Star } from 'lucide-vue-next';
 import MatchRow from './MatchRow.vue';
+import API_URL from '../config/api';
 
 const props = defineProps({
   filter: String,
@@ -64,7 +65,7 @@ const fetchMatches = async () => {
       params.date = props.selectedDate.toISOString().split('T')[0];
     }
     
-    const response = await axios.get('/api/matches', { params });
+    const response = await axios.get(`${API_URL}/api/matches`, { params });
     // Ensure we always have an array
     matches.value = Array.isArray(response.data) ? response.data : [];
   } catch (err) {

@@ -65,6 +65,7 @@
 import { ref, onMounted, computed } from 'vue';
 import { X, Trophy, Square, RefreshCw, Search, ShieldAlert } from 'lucide-vue-next';
 import axios from 'axios';
+import API_URL from '../config/api';
 
 const props = defineProps({
   show: Boolean,
@@ -80,7 +81,7 @@ const fetchDetails = async () => {
   if (!props.match.eventId) return;
   loading.value = true;
   try {
-    const res = await axios.get(`/api/match/${props.match.eventId}`);
+    const res = await axios.get(`${API_URL}/api/match/${props.match.eventId}`);
     fullMatch.value = res.data;
   } catch (e) {
     console.error('Error fetching match details:', e);
