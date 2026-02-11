@@ -64,7 +64,7 @@ const fetchMatches = async () => {
       params.date = props.selectedDate.toISOString().split('T')[0];
     }
     
-    const response = await axios.get('http://localhost:3000/api/matches', { params });
+    const response = await axios.get('/api/matches', { params });
     // Remove console.log in production
     // console.log('Matches loaded:', response.data.length); 
     matches.value = response.data;
