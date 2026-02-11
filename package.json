@@ -1,0 +1,16 @@
+{
+  "name": "diretta",
+  "version": "1.0.0",
+  "description": "",
+  "main": "inspect_db.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "mongodb": "^7.1.0"
+  }
+}
