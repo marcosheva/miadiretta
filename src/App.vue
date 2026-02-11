@@ -38,13 +38,10 @@
         />
       </main>
       <aside class="right-panel">
-        <div class="premium-card ads-box">
-          <p>Scommesse Consigliate</p>
-          <div class="bet-promo">
-            <span>Inter vs Milan</span>
-            <span class="odds-val">1.85</span>
-          </div>
-        </div>
+        <GoalEventsPanel
+          :goals="recentGoals"
+          @click="selectedMatch = $event"
+        />
       </aside>
     </div>
 
@@ -55,14 +52,6 @@
       @close="selectedMatch = null"
     />
 
-    <GoalNotification
-      v-for="(notif, idx) in goalNotifications"
-      :key="notif._id || idx"
-      :match="notif"
-      :offset="idx"
-      @close="removeNotification(notif)"
-      @click="selectedMatch = $event"
-    />
   </div>
 </template>
 
@@ -73,27 +62,51 @@ import Header from './components/Header.vue';
 import Sidebar from './components/Sidebar.vue';
 import MatchList from './components/MatchList.vue';
 import MatchDetailModal from './components/MatchDetailModal.vue';
-import GoalNotification from './components/GoalNotification.vue';
+import GoalEventsPanel from './components/GoalEventsPanel.vue';
 
 const currentFilter = ref('TUTTI');
 const activeFilter = ref({ type: 'all', value: null });
 const filterOptions = ['TUTTI', 'LIVE', 'CONCLUSI', 'PROGRAMMATE'];
 const selectedDate = ref(new Date());
 const selectedMatch = ref(null);
-const goalNotifications = ref([]);
+// Storico degli ultimi 10 gol segnati (con timestamp)
+const recentGoals = ref([]);
+const showGoalsPanel = ref(false);
+
+// Storico dei punteggi precedenti per determinare quale squadra ha segnato
+const previousScores = ref({});
 
 // Fornisci una funzione per mostrare la notifica del gol ai componenti figli
-const showGoalNotification = (match) => {
+const showGoalNotification = (match, prevScores = null) => {
   if (!match) return;
-  // Evita duplicati della stessa partita consecutivi
-  goalNotifications.value = [
-    match,
-    ...goalNotifications.value.filter(m => m._id !== match._id)
-  ].slice(0, 3); // massimo 3 notifiche impilate
-};
-
-const removeNotification = (match) => {
-  goalNotifications.value = goalNotifications.value.filter(m => m !== match);
+  
+  const prev = prevScores || previousScores.value[match._id];
+  const currentHome = Number(match.homeTeam?.score ?? 0);
+  const currentAway = Number(match.awayTeam?.score ?? 0);
+  const prevHome = prev ? Number(prev.home ?? 0) : 0;
+  const prevAway = prev ? Number(prev.away ?? 0) : 0;
+  
+  // Determina quale squadra ha segnato
+  let scoringTeam = null;
+  if (currentHome > prevHome) scoringTeam = 'home';
+  else if (currentAway > prevAway) scoringTeam = 'away';
+  
+  // Aggiungi il nuovo gol allo storico con timestamp e info su chi ha segnato
+  const goalWithTime = {
+    ...match,
+    goalTimestamp: Date.now(),
+    goalId: `${match._id}_${Date.now()}`,
+    scoringTeam: scoringTeam
+  };
+  
+  // Aggiorna lo storico dei punteggi
+  previousScores.value[match._id] = {
+    home: currentHome,
+    away: currentAway
+  };
+  
+  // Aggiungi in cima e mantieni solo gli ultimi 10
+  recentGoals.value = [goalWithTime, ...recentGoals.value].slice(0, 10);
 };
 
 provide('showGoalNotification', showGoalNotification);
@@ -137,10 +150,10 @@ const nextDay = () => {
 
 .main-layout {
   display: grid;
-  grid-template-columns: 240px 1fr 280px;
+  grid-template-columns: 240px 1fr 380px;
   gap: 20px;
   padding: 20px;
-  max-width: 1400px;
+  max-width: 1600px;
   margin: 0 auto;
   width: 100%;
 }
@@ -244,6 +257,10 @@ const nextDay = () => {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  position: sticky;
+  top: 90px;
+  height: calc(100vh - 120px);
+  overflow: hidden;
 }
 
 .ads-box {

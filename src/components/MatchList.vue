@@ -106,34 +106,38 @@ const detectGoals = (newMatches) => {
     const currentAway = Number(m.awayTeam.score ?? 0);
 
     // Se la partita è live e uno dei due punteggi è aumentato, evidenzia
-    if (
-      m.status === 'LIVE' &&
-      prev &&
-      (currentHome > prev.home || currentAway > prev.away)
-    ) {
-      newHighlights[m._id] = true;
+    if (m.status === 'LIVE') {
+      if (prev) {
+        // C'è un punteggio precedente: controlla se è aumentato
+        const homeIncreased = currentHome > prev.home;
+        const awayIncreased = currentAway > prev.away;
+        
+        if (homeIncreased || awayIncreased) {
+          newHighlights[m._id] = true;
 
-      // Suono per il nuovo gol
-      playGoalSound();
+          // Suono per il nuovo gol
+          playGoalSound();
 
-      // Mostra la notifica del gol in alto
-      if (showGoalNotification) {
-        showGoalNotification(m);
+          // Mostra la notifica del gol in alto (mostrerà tutti gli ultimi 10)
+          if (showGoalNotification) {
+            // Passa anche i punteggi precedenti per determinare chi ha segnato
+            showGoalNotification(m, prev);
+          }
+        }
       }
-
-      // Rimuovi l'evidenziazione dopo qualche secondo
-      setTimeout(() => {
-        goalHighlights.value = {
-          ...goalHighlights.value,
-          [m._id]: false
-        };
-      }, 12000);
+      
+      // Salva sempre il punteggio corrente (anche se non c'è prev)
+      newLastScores[m._id] = {
+        home: currentHome,
+        away: currentAway
+      };
+    } else {
+      // Per partite non live, salva comunque il punteggio
+      newLastScores[m._id] = {
+        home: currentHome,
+        away: currentAway
+      };
     }
-
-    newLastScores[m._id] = {
-      home: currentHome,
-      away: currentAway
-    };
   });
 
   lastScores.value = newLastScores;
@@ -197,7 +201,10 @@ const fetchMatches = async () => {
     const response = await axios.get(`${API_URL}/api/matches`, { params });
     const raw = Array.isArray(response.data) ? response.data : [];
 
-    // Applica smoothing per evitare "salti indietro"
+    // IMPORTANTE: rileva i gol PRIMA della stabilizzazione, usando i dati raw
+    detectGoals(raw);
+
+    // Poi applica smoothing per evitare "salti indietro" nella visualizzazione
     const data = applyStabilization(raw);
 
     // aggiorna lo stato stabile
@@ -206,9 +213,6 @@ const fetchMatches = async () => {
       if (m && m._id) newStable[m._id] = m;
     });
     stableMatches.value = newStable;
-
-    // Prima di aggiornare la lista, controlla se ci sono nuovi gol
-    detectGoals(data);
 
     matches.value = data;
   } catch (err) {

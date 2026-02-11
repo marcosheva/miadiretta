@@ -13,10 +13,11 @@
           <span class="score">{{ match.homeTeam.score }} - {{ match.awayTeam.score }}</span>
           <span class="team-name">{{ match.awayTeam.name }}</span>
         </div>
-        <div class="match-meta">
-          <span class="league">{{ match.league }}</span>
-          <span v-if="match.minute" class="minute">{{ match.minute }}</span>
-        </div>
+      <div class="match-meta">
+        <span class="league">{{ match.league }}</span>
+        <span v-if="match.minute" class="minute">{{ match.minute }}</span>
+        <span v-if="match.goalTimestamp" class="time-ago">{{ getTimeAgo(match.goalTimestamp) }}</span>
+      </div>
       </div>
       <button class="close-btn" @click.stop="close">×</button>
     </div>
@@ -43,20 +44,21 @@ const emit = defineEmits(['close', 'click']);
 const visible = ref(false);
 const notificationStyle = computed(() => {
   const baseTop = 20;
-  const step = 80; // distanza verticale tra notifiche
+  const step = 70; // distanza verticale tra notifiche (ridotta per farne stare di più)
   return {
-    top: `${baseTop + props.offset * step}px`
+    top: `${baseTop + props.offset * step}px`,
+    zIndex: 10000 - props.offset // le più recenti sopra
   };
 });
 
 watch(() => props.match, (newMatch) => {
   if (newMatch) {
     visible.value = true;
-    // Auto-close dopo 8 secondi
+    // Auto-close dopo 12 secondi (più tempo per vedere tutte le notifiche)
     setTimeout(() => {
       visible.value = false;
       setTimeout(() => emit('close'), 300); // Aspetta la fine dell'animazione
-    }, 8000);
+    }, 12000);
   }
 }, { immediate: true });
 
@@ -81,16 +83,17 @@ const handleClick = () => {
   backdrop-filter: blur(10px);
   border: 2px solid rgba(255, 255, 255, 0.3);
   border-radius: 12px;
-  padding: 16px 20px;
-  min-width: 320px;
-  max-width: 500px;
+  padding: 12px 16px;
+  min-width: 300px;
+  max-width: 480px;
   box-shadow: 0 8px 32px rgba(231, 76, 60, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.1);
   cursor: pointer;
   transition: all 0.3s ease;
   display: flex;
   align-items: center;
-  gap: 15px;
+  gap: 12px;
   animation: pulse 2s ease-in-out infinite;
+  font-size: 0.9rem;
 }
 
 .goal-notification:hover {
@@ -162,6 +165,12 @@ const handleClick = () => {
   border-radius: 4px;
   font-weight: 700;
   color: #ffd700;
+}
+
+.time-ago {
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.7);
+  font-style: italic;
 }
 
 .close-btn {
