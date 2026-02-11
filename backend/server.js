@@ -237,6 +237,21 @@ app.get('/api/matches/:id', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// Sync Endpoint for Vercel Cron
+app.get('/api/sync', async (req, res) => {
+  try {
+    console.log('Manual/Cron sync triggered');
+    await syncFromAPI();
+    res.json({ message: 'Sync started' });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
+
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+}
+
+module.exports = app;
