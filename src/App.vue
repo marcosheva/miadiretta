@@ -54,22 +54,49 @@
       :match="selectedMatch" 
       @close="selectedMatch = null"
     />
+
+    <GoalNotification
+      v-for="(notif, idx) in goalNotifications"
+      :key="notif._id || idx"
+      :match="notif"
+      :offset="idx"
+      @close="removeNotification(notif)"
+      @click="selectedMatch = $event"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, provide } from 'vue';
 import { ChevronLeft, ChevronRight, Calendar } from 'lucide-vue-next';
 import Header from './components/Header.vue';
 import Sidebar from './components/Sidebar.vue';
 import MatchList from './components/MatchList.vue';
 import MatchDetailModal from './components/MatchDetailModal.vue';
+import GoalNotification from './components/GoalNotification.vue';
 
 const currentFilter = ref('TUTTI');
 const activeFilter = ref({ type: 'all', value: null });
 const filterOptions = ['TUTTI', 'LIVE', 'CONCLUSI', 'PROGRAMMATE'];
 const selectedDate = ref(new Date());
 const selectedMatch = ref(null);
+const goalNotifications = ref([]);
+
+// Fornisci una funzione per mostrare la notifica del gol ai componenti figli
+const showGoalNotification = (match) => {
+  if (!match) return;
+  // Evita duplicati della stessa partita consecutivi
+  goalNotifications.value = [
+    match,
+    ...goalNotifications.value.filter(m => m._id !== match._id)
+  ].slice(0, 3); // massimo 3 notifiche impilate
+};
+
+const removeNotification = (match) => {
+  goalNotifications.value = goalNotifications.value.filter(m => m !== match);
+};
+
+provide('showGoalNotification', showGoalNotification);
 
 const handleFilter = (filter) => {
   activeFilter.value = filter;

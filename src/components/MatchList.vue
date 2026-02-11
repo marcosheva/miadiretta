@@ -25,11 +25,13 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue';
+import { ref, onMounted, computed, watch, inject } from 'vue';
 import axios from 'axios';
 import { Star } from 'lucide-vue-next';
 import MatchRow from './MatchRow.vue';
 import API_URL from '../config/api';
+
+const showGoalNotification = inject('showGoalNotification', null);
 
 const props = defineProps({
   filter: String,
@@ -48,6 +50,8 @@ const favorites = ref(JSON.parse(localStorage.getItem('favoriteLeagues') || '[]'
 
 // Storico dei punteggi per rilevare nuovi gol
 const lastScores = ref({});
+// Stato \"stabile\" che usiamo per evitare che punteggi/minuti tornino indietro
+const stableMatches = ref({});
 // Match che hanno avuto un gol recente (per evidenziarli)
 const goalHighlights = ref({});
 
@@ -112,6 +116,11 @@ const detectGoals = (newMatches) => {
       // Suono per il nuovo gol
       playGoalSound();
 
+      // Mostra la notifica del gol in alto
+      if (showGoalNotification) {
+        showGoalNotification(m);
+      }
+
       // Rimuovi l'evidenziazione dopo qualche secondo
       setTimeout(() => {
         goalHighlights.value = {
@@ -131,6 +140,49 @@ const detectGoals = (newMatches) => {
   goalHighlights.value = newHighlights;
 };
 
+const applyStabilization = (data) => {
+  return data.map((m) => {
+    if (!m || !m._id || !m.homeTeam || !m.awayTeam) return m;
+
+    const prev = stableMatches.value[m._id];
+    if (!prev) return m;
+
+    const newHome = Number(m.homeTeam.score ?? 0);
+    const newAway = Number(m.awayTeam.score ?? 0);
+    const prevHome = Number(prev.homeTeam?.score ?? 0);
+    const prevAway = Number(prev.awayTeam?.score ?? 0);
+
+    // punteggi mai in diminuzione
+    const homeScore = Math.max(prevHome, newHome);
+    const awayScore = Math.max(prevAway, newAway);
+
+    // minuto mai in diminuzione (se è una stringa tipo 45')
+    const parseMinute = (val) => {
+      if (!val) return 0;
+      const str = String(val).replace("'", '');
+      const num = parseInt(str, 10);
+      return Number.isNaN(num) ? 0 : num;
+    };
+
+    const prevMin = parseMinute(prev.minute);
+    const newMin = parseMinute(m.minute);
+    const minute = newMin >= prevMin ? m.minute : prev.minute;
+
+    return {
+      ...m,
+      minute,
+      homeTeam: {
+        ...m.homeTeam,
+        score: homeScore
+      },
+      awayTeam: {
+        ...m.awayTeam,
+        score: awayScore
+      }
+    };
+  });
+};
+
 const fetchMatches = async () => {
   loading.value = true;
   try {
@@ -143,7 +195,17 @@ const fetchMatches = async () => {
     }
     
     const response = await axios.get(`${API_URL}/api/matches`, { params });
-    const data = Array.isArray(response.data) ? response.data : [];
+    const raw = Array.isArray(response.data) ? response.data : [];
+
+    // Applica smoothing per evitare "salti indietro"
+    const data = applyStabilization(raw);
+
+    // aggiorna lo stato stabile
+    const newStable = {};
+    data.forEach((m) => {
+      if (m && m._id) newStable[m._id] = m;
+    });
+    stableMatches.value = newStable;
 
     // Prima di aggiornare la lista, controlla se ci sono nuovi gol
     detectGoals(data);
