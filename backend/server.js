@@ -178,7 +178,7 @@ app.get('/api/matches/live', async (req, res) => {
   }
 });
 
-app.get('/api/matches/:id', async (req, res) => {
+app.get('/api/match/:id', async (req, res) => {
   try {
     const TOKEN = process.env.BETSAPI_TOKEN;
     const match = await Match.findOne({ eventId: req.params.id });
