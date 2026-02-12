@@ -17,12 +17,83 @@ app.use(express.json());
 mongoose.connect(MONGODB_URI)
   .then(() => {
     console.log('Connected to MongoDB');
-    // Initial sync on start
-    syncFromAPI();
+    syncFromAPI().then(() => {
+      setInterval(syncLiveOnly, LIVE_SYNC_INTERVAL_MS);
+      setInterval(syncFromAPI, FULL_SYNC_INTERVAL_MS);
+    });
   })
   .catch(err => console.error('MongoDB connection error:', err));
 
-// Sync Function
+// Helper: da evento BetsAPI a oggetto match e salvataggio in DB
+function buildMatchData(ev) {
+  let homeScore = 0, awayScore = 0;
+  if (ev.ss) {
+    const scores = ev.ss.split('-');
+    homeScore = parseInt(scores[0]) || 0;
+    awayScore = parseInt(scores[1]) || 0;
+  }
+  return {
+    eventId: ev.id,
+    sport: 'Football',
+    league: ev.league?.name || 'Unknown League',
+    leagueId: ev.league?.id,
+    country: ev.cc?.toUpperCase() || (ev.league?.name?.split(' ')[0]?.toUpperCase() || 'UN'),
+    startTime: new Date(parseInt(ev.time) * 1000),
+    status: ev.timer ? 'LIVE' : (ev.ss && ev.ss.includes('-') && !ev.timer ? 'FINISHED' : 'SCHEDULED'),
+    minute: ev.timer?.tm ? `${ev.timer.tm}'` : '',
+    homeTeam: {
+      name: ev.home?.name || 'Home',
+      logo: ev.home?.image_id ? `https://assets.b365api.com/images/team/m/${ev.home.image_id}.png` : '',
+      score: homeScore
+    },
+    awayTeam: {
+      name: ev.away?.name || 'Away',
+      logo: ev.away?.image_id ? `https://assets.b365api.com/images/team/m/${ev.away.image_id}.png` : '',
+      score: awayScore
+    }
+  };
+}
+
+async function saveEventToDb(ev) {
+  if (!ev.time) return;
+  const matchData = buildMatchData(ev);
+  await Match.findOneAndUpdate(
+    { eventId: matchData.eventId },
+    matchData,
+    { upsert: true }
+  );
+}
+
+// Sync solo LIVE: 1 richiesta, aggiorna punteggi/minuti e marca FINISHED chi non è più live
+const LIVE_SYNC_INTERVAL_MS = 20 * 1000; // 20 secondi
+
+async function syncLiveOnly() {
+  const TOKEN = process.env.BETSAPI_TOKEN;
+  if (!TOKEN) return;
+  try {
+    const inplayRes = await axios.get(`https://api.b365api.com/v1/events/inplay?sport_id=1&token=${TOKEN}`);
+    const liveItems = inplayRes.data.results || [];
+    const liveEventIds = new Set(liveItems.map(ev => ev.id));
+
+    const dbLiveMatches = await Match.find({ status: 'LIVE' });
+    for (const dbMatch of dbLiveMatches) {
+      if (dbMatch.eventId && !liveEventIds.has(dbMatch.eventId)) {
+        dbMatch.status = 'FINISHED';
+        await dbMatch.save();
+      }
+    }
+
+    for (const ev of liveItems) await saveEventToDb(ev);
+    if (liveItems.length > 0) console.log(`Live sync: ${liveItems.length} partite aggiornate`);
+  } catch (e) {
+    console.error('Live sync error:', e.message);
+  }
+}
+
+// Sync completa: inplay + upcoming + ended (per nuove partite e risultati finiti)
+const FULL_SYNC_INTERVAL_MS = 3 * 60 * 1000; // 3 minuti
+const UPCOMING_PAGES = 20; // pagine upcoming
+
 async function syncFromAPI() {
   const TOKEN = process.env.BETSAPI_TOKEN;
   if (!TOKEN) {
@@ -33,8 +104,7 @@ async function syncFromAPI() {
   try {
     const allEvents = [];
     const liveEventIds = new Set();
-    
-    // 1. Live Matches
+
     try {
       const inplayRes = await axios.get(`https://api.b365api.com/v1/events/inplay?sport_id=1&token=${TOKEN}`);
       const liveItems = inplayRes.data.results || [];
@@ -43,27 +113,24 @@ async function syncFromAPI() {
     } catch (e) { console.error('Error fetching live:', e.message); }
 
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-    
-    // 2. Upcoming (Deep Sync - up to 50 pages)
-    for (let page = 1; page <= 50; page++) {
+
+    for (let page = 1; page <= UPCOMING_PAGES; page++) {
       try {
-        await wait(500); // 0.5s delay for background sync
+        await wait(500);
         const res = await axios.get(`https://api.b365api.com/v1/events/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
         const results = res.data.results || [];
         if (results.length === 0) break;
         allEvents.push(...results);
-        if (results.length < 50) break; 
+        if (results.length < 50) break;
       } catch (e) { break; }
     }
 
-    // 3. Ended (Today)
     try {
       const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
       const endedRes = await axios.get(`https://api.b365api.com/v1/events/ended?sport_id=1&token=${TOKEN}&day=${today}`);
       allEvents.push(...(endedRes.data.results || []));
     } catch (e) { }
 
-    // 4. Transition Logic: mark matches as FINISHED if they are no longer live
     const dbLiveMatches = await Match.find({ status: 'LIVE' });
     for (const dbMatch of dbLiveMatches) {
       if (dbMatch.eventId && !liveEventIds.has(dbMatch.eventId)) {
@@ -72,56 +139,13 @@ async function syncFromAPI() {
       }
     }
 
-    console.log(`Auto-sync: Processing ${allEvents.length} events`);
-
-    for (const ev of allEvents) {
-      if (!ev.time) continue;
-
-      let homeScore = 0;
-      let awayScore = 0;
-      if (ev.ss) {
-        const scores = ev.ss.split('-');
-        homeScore = parseInt(scores[0]) || 0;
-        awayScore = parseInt(scores[1]) || 0;
-      }
-
-      const matchData = {
-        eventId: ev.id,
-        sport: 'Football',
-        league: ev.league?.name || 'Unknown League',
-        leagueId: ev.league?.id,
-        country: ev.cc?.toUpperCase() || (ev.league?.name?.split(' ')[0]?.toUpperCase() || 'UN'),
-        startTime: new Date(parseInt(ev.time) * 1000),
-        status: ev.timer ? 'LIVE' : (ev.ss && ev.ss.includes('-') && !ev.timer ? 'FINISHED' : 'SCHEDULED'), 
-        minute: ev.timer?.tm ? `${ev.timer.tm}'` : '',
-        homeTeam: {
-          name: ev.home?.name || 'Home',
-          logo: ev.home?.image_id ? `https://assets.b365api.com/images/team/m/${ev.home.image_id}.png` : '',
-          score: homeScore
-        },
-        awayTeam: {
-          name: ev.away?.name || 'Away',
-          logo: ev.away?.image_id ? `https://assets.b365api.com/images/team/m/${ev.away.image_id}.png` : '',
-          score: awayScore
-        }
-      };
-
-      await Match.findOneAndUpdate(
-        { eventId: matchData.eventId },
-        matchData,
-        { upsert: true }
-      );
-    }
+    console.log(`Full sync: ${allEvents.length} events`);
+    for (const ev of allEvents) await saveEventToDb(ev);
   } catch (err) {
-    console.error('Auto-sync error:', err.message);
+    console.error('Full sync error:', err.message);
   }
 }
 
-// Run sync every 1 minute for live results
-setInterval(() => {
-  console.log('--- Triggering periodic sync ---');
-  syncFromAPI();
-}, 60 * 1000);
 
 // Routes
 app.get('/api/matches', async (req, res) => {

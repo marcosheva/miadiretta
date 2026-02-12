@@ -39,7 +39,7 @@
 
     <nav class="nav-nations">
       <div
-        v-for="country in leagueGroups"
+        v-for="country in visibleLeagueGroups"
         :key="country._id"
         class="nation-block"
         :class="{ expanded: expandedCountries.includes(country._id) }"
@@ -73,11 +73,39 @@
               >
                 <Star :size="14" :fill="isFavorite(league.name) ? 'currentColor' : 'none'" />
               </button>
+              <button
+                class="hide-btn"
+                @click.stop="$emit('toggle-hidden', league.name)"
+                title="Nascondi campionato"
+              >
+                <EyeOff :size="14" />
+              </button>
             </li>
           </ul>
         </Transition>
       </div>
     </nav>
+
+    <div v-if="hiddenLeagues.length > 0" class="section-hidden">
+      <h3 class="section-title section-hidden-title">Campionati nascosti</h3>
+      <ul class="hidden-list">
+        <li
+          v-for="name in hiddenLeagues"
+          :key="name"
+          class="hidden-item"
+        >
+          <span class="hidden-name">{{ name }}</span>
+          <button
+            class="show-btn"
+            @click="$emit('toggle-hidden', name)"
+            title="Mostra di nuovo"
+          >
+            <Eye :size="14" />
+            Mostra
+          </button>
+        </li>
+      </ul>
+    </div>
 
     <div v-if="leagueGroups.length === 0 && !loading" class="empty-state">
       Nessun campionato disponibile
@@ -90,7 +118,7 @@
 
 <script setup>
 import { ref, onMounted, computed } from 'vue';
-import { ChevronRight, Star } from 'lucide-vue-next';
+import { ChevronRight, Star, EyeOff, Eye } from 'lucide-vue-next';
 import API_URL from '../config/api';
 import axios from 'axios';
 
@@ -138,17 +166,28 @@ const favorites = ref(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'));
 const leagueToCountry = ref({});
 const props = defineProps({
   activeFilter: { type: Object, default: () => ({ type: 'all', value: null }) },
+  hiddenLeagues: { type: Array, default: () => [] },
 });
 
-const emit = defineEmits(['filter']);
+const emit = defineEmits(['filter', 'toggle-hidden']);
 
 const favoriteLeaguesWithFlags = computed(() => {
+  const hidden = props.hiddenLeagues || [];
   return favorites.value
+    .filter((name) => !hidden.includes(name))
     .map((name) => ({ name, cc: leagueToCountry.value[name] || null }))
     .filter((f) => f.name);
 });
 
 const isFavorite = (leagueName) => favorites.value.includes(leagueName);
+
+const visibleLeagueGroups = computed(() => {
+  const hidden = props.hiddenLeagues || [];
+  return leagueGroups.value.map((c) => ({
+    ...c,
+    leagues: (c.leagues || []).filter((l) => !hidden.includes(l.name)),
+  })).filter((c) => c.leagues.length > 0);
+});
 
 const toggleFavorite = (leagueName, cc = null) => {
   if (favorites.value.includes(leagueName)) {
@@ -531,6 +570,22 @@ onMounted(fetchLeagues);
   color: var(--accent);
 }
 
+.hide-btn {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 2px;
+}
+
+.hide-btn:hover {
+  color: var(--primary);
+}
+
 .league-item:hover {
   background: rgba(0, 135, 78, 0.12);
   color: var(--text-main);
@@ -579,6 +634,64 @@ onMounted(fetchLeagues);
 .expand-enter-from,
 .expand-leave-to {
   opacity: 0;
+}
+
+.section-hidden {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.section-hidden-title {
+  margin-bottom: 8px;
+}
+
+.hidden-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.hidden-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  border-radius: 6px;
+}
+
+.hidden-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.hidden-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.show-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(0, 135, 78, 0.2);
+  border: none;
+  color: var(--primary);
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.show-btn:hover {
+  background: rgba(0, 135, 78, 0.35);
 }
 
 .empty-state,

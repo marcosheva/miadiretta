@@ -38,7 +38,8 @@ const props = defineProps({
     default: () => ({ type: 'all', value: null })
   },
   selectedDate: Date,
-  teamSearch: { type: String, default: '' }
+  teamSearch: { type: String, default: '' },
+  hiddenLeagues: { type: Array, default: () => [] }
 });
 
 defineEmits(['select-match']);
@@ -112,15 +113,11 @@ const detectGoals = (newMatches) => {
         const awayIncreased = currentAway > prev.away;
         
         if (homeIncreased || awayIncreased) {
-          newHighlights[m._id] = true;
-
-          // Suono per il nuovo gol
-          playGoalSound();
-
-          // Mostra la notifica del gol in alto (mostrerà tutti gli ultimi 10)
-          if (showGoalNotification) {
-            // Passa anche i punteggi precedenti per determinare chi ha segnato
-            showGoalNotification(m, prev);
+          const isHiddenLeague = (props.hiddenLeagues || []).includes(m.league);
+          if (!isHiddenLeague) {
+            newHighlights[m._id] = true;
+            playGoalSound();
+            if (showGoalNotification) showGoalNotification(m, prev);
           }
         }
       }
@@ -244,12 +241,17 @@ const groupedMatches = computed(() => {
     return acc;
   }, {});
 
-  // Convert to array and sort
-  return Object.keys(groups).map(name => ({
-    name,
-    matches: groups[name],
-    isFavorite: favorites.value.includes(name)
-  })).sort((a, b) => {
+  const hiddenSet = new Set(props.hiddenLeagues || []);
+
+  // Convert to array, escludi campionati nascosti, e ordina
+  return Object.keys(groups)
+    .filter((name) => !hiddenSet.has(name))
+    .map((name) => ({
+      name,
+      matches: groups[name],
+      isFavorite: favorites.value.includes(name)
+    }))
+    .sort((a, b) => {
     // 1. Favorites first
     if (a.isFavorite && !b.isFavorite) return -1;
     if (!a.isFavorite && b.isFavorite) return 1;

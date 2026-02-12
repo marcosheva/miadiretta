@@ -2,7 +2,13 @@
   <div class="app-container">
     <Header v-model:teamSearch="teamSearch" />
     <div class="main-layout">
-      <Sidebar class="sidebar" :activeFilter="activeFilter" @filter="handleFilter" />
+      <Sidebar
+          class="sidebar"
+          :activeFilter="activeFilter"
+          :hiddenLeagues="hiddenLeagues"
+          @filter="handleFilter"
+          @toggle-hidden="toggleLeagueHidden"
+        />
       <main class="content">
         <div class="filters-container animate-fade-in">
           <div class="status-filters">
@@ -37,12 +43,13 @@
           :activeFilter="activeFilter" 
           :selectedDate="selectedDate"
           :teamSearch="teamSearch"
+          :hiddenLeagues="hiddenLeagues"
           @select-match="selectedMatch = $event"
         />
       </main>
       <aside class="right-panel">
         <GoalEventsPanel
-          :goals="recentGoals"
+          :goals="visibleRecentGoals"
           @click="selectedMatch = $event"
         />
       </aside>
@@ -73,6 +80,17 @@ const filterOptions = ['TUTTI', 'LIVE', 'CONCLUSI', 'PROGRAMMATE'];
 const selectedDate = ref(new Date()); // null = tutte le date
 const teamSearch = ref('');
 const selectedMatch = ref(null);
+
+const HIDDEN_LEAGUES_KEY = 'hiddenLeagues';
+const hiddenLeagues = ref(JSON.parse(localStorage.getItem(HIDDEN_LEAGUES_KEY) || '[]'));
+
+const toggleLeagueHidden = (leagueName) => {
+  const set = new Set(hiddenLeagues.value);
+  if (set.has(leagueName)) set.delete(leagueName);
+  else set.add(leagueName);
+  hiddenLeagues.value = [...set];
+  localStorage.setItem(HIDDEN_LEAGUES_KEY, JSON.stringify(hiddenLeagues.value));
+};
 // Storico degli ultimi 10 gol segnati (con timestamp)
 const recentGoals = ref([]);
 
@@ -82,6 +100,7 @@ const previousScores = ref({});
 // Fornisci una funzione per mostrare la notifica del gol ai componenti figli
 const showGoalNotification = (match, prevScores = null) => {
   if (!match) return;
+  if (hiddenLeagues.value.includes(match.league)) return;
 
   const prev = prevScores || previousScores.value[match._id];
   const currentHome = Number(match.homeTeam?.score ?? 0);
@@ -118,6 +137,11 @@ const showGoalNotification = (match, prevScores = null) => {
   // Ultimi gol in cima: nuovo in testa, poi gli altri, max 10
   recentGoals.value = [goalWithTime, ...recentGoals.value].slice(0, 10);
 };
+
+const visibleRecentGoals = computed(() => {
+  const hidden = new Set(hiddenLeagues.value);
+  return recentGoals.value.filter((g) => !hidden.has(g.league));
+});
 
 provide('showGoalNotification', showGoalNotification);
 
