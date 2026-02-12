@@ -1,7 +1,11 @@
 const axios = require('axios');
 require('dotenv').config();
 
-const TOKEN = '83845-ErtX9R6xbi7Qke';
+const TOKEN = process.env.BETSAPI_TOKEN;
+if (!TOKEN) {
+  console.error('BETSAPI_TOKEN mancante in .env');
+  process.exit(1);
+}
 const BASE_URL = 'https://api.b365api.com/v1/bet365';
 
 async function diagnose() {

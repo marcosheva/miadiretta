@@ -1,7 +1,12 @@
 const mongoose = require('mongoose');
 const Match = require('./models/Match');
+require('dotenv').config();
 
-const MONGODB_URI = "mongodb+srv://bet365odds:Aurora86@cluster0.svytet0.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
+const MONGODB_URI = process.env.MONGODB_URI;
+if (!MONGODB_URI) {
+  console.error('MONGODB_URI mancante in .env');
+  process.exit(1);
+}
 
 const sampleMatches = [
   {

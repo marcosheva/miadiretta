@@ -1,6 +1,12 @@
 <template>
-  <div class="match-row animate-fade-in" :class="{ 'goal-flash': highlight }" @click="$emit('select', match)">
+  <div
+    class="match-row animate-fade-in"
+    :class="{ 'goal-highlight': highlight }"
+    :style="{ gridTemplateColumns: match.odds ? '100px minmax(0, 1fr) 180px' : '100px minmax(0, 1fr)' }"
+    @click="$emit('select', match)"
+  >
     <div class="match-time-status">
+      <span v-if="highlight" class="goal-badge">⚽</span>
       <div :class="['match-status', { live: match.status === 'LIVE' }]">
         <span v-if="match.status === 'LIVE'" class="live-minute">{{ match.minute }}</span>
         <span v-else-if="match.status === 'FINISHED'" class="finished-status">FIN</span>
@@ -86,37 +92,66 @@ const isWinner = (s1, s2) => s1 > s2;
 <style scoped>
 .match-row {
   display: grid;
-  grid-template-columns: 100px 1fr 200px;
+  grid-template-columns: 100px minmax(0, 1fr) 180px;
   align-items: center;
   background: var(--bg-card);
   padding: 10px 15px;
   border-bottom: 1px solid var(--border);
   transition: all 0.2s ease;
   cursor: pointer;
+  width: 100%;
+  min-width: 0;
 }
 
-.goal-flash {
-  animation: goalFlash 0.6s ease-in-out 4;
-  border-color: var(--live);
-  box-shadow: 0 0 12px rgba(231, 76, 60, 0.4);
+/* Evidenziazione partita in cui si segna */
+.goal-highlight {
+  background: linear-gradient(
+    135deg,
+    rgba(0, 135, 78, 0.18) 0%,
+    rgba(241, 196, 15, 0.08) 50%,
+    rgba(0, 135, 78, 0.12) 100%
+  );
+  border-left: 3px solid var(--primary);
+  border-right: 1px solid var(--border);
+  border-top: 1px solid rgba(0, 135, 78, 0.4);
+  border-bottom: 1px solid rgba(0, 135, 78, 0.3);
+  box-shadow:
+    0 0 20px rgba(0, 135, 78, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  animation: goalHighlightPulse 2s ease-in-out infinite;
 }
 
-@keyframes goalFlash {
-  0% {
-    background: var(--bg-card);
-  }
-  25% {
-    background: rgba(231, 76, 60, 0.25);
+.goal-highlight .score-container {
+  background: rgba(0, 135, 78, 0.25);
+  border-color: var(--primary);
+  box-shadow: 0 0 12px rgba(0, 135, 78, 0.3);
+}
+
+.goal-highlight .score {
+  color: var(--accent);
+  text-shadow: 0 0 12px rgba(241, 196, 15, 0.4);
+}
+
+.goal-badge {
+  font-size: 1rem;
+  margin-right: 6px;
+  filter: drop-shadow(0 0 6px rgba(241, 196, 15, 0.6));
+  animation: goalBadgeBounce 0.5s ease-out;
+}
+
+@keyframes goalHighlightPulse {
+  0%, 100% {
+    box-shadow: 0 0 20px rgba(0, 135, 78, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   }
   50% {
-    background: var(--bg-card);
+    box-shadow: 0 0 28px rgba(0, 135, 78, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   }
-  75% {
-    background: rgba(231, 76, 60, 0.25);
-  }
-  100% {
-    background: var(--bg-card);
-  }
+}
+
+@keyframes goalBadgeBounce {
+  0% { transform: scale(0); opacity: 0; }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); opacity: 1; }
 }
 
 .match-row:hover {
@@ -125,7 +160,9 @@ const isWinner = (s1, s2) => s1 > s2;
 
 .match-time-status {
   display: flex;
+  align-items: center;
   justify-content: center;
+  gap: 6px;
   font-family: 'Outfit', sans-serif;
 }
 
@@ -148,22 +185,30 @@ const isWinner = (s1, s2) => s1 > s2;
 .match-main {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 15px;
   padding: 0 20px;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .team {
-  flex: 1;
+  flex: 1 1 0%;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .team.home { text-align: right; }
 .team.away { text-align: left; }
 
 .team-name {
+  display: block;
   font-size: 0.95rem;
   font-weight: 500;
   color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .team-name.winner {

@@ -13,7 +13,7 @@
       </div>
     </div>
     
-    <div class="events-list">
+    <div ref="eventsListRef" class="events-list">
       <div
         v-if="goals.length === 0"
         class="no-goals"
@@ -49,6 +49,8 @@
 </template>
 
 <script setup>
+import { ref, watch } from 'vue';
+
 const props = defineProps({
   goals: {
     type: Array,
@@ -57,6 +59,17 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['click']);
+const eventsListRef = ref(null);
+
+// Quando arriva un nuovo gol, scroll in cima così l'ultimo è visibile in alto
+watch(
+  () => props.goals.length,
+  (newLen, oldLen) => {
+    if (newLen > oldLen && eventsListRef.value) {
+      eventsListRef.value.scrollTop = 0;
+    }
+  }
+);
 
 const handleClick = (goal) => {
   emit('click', goal);

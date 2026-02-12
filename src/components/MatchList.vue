@@ -1,8 +1,6 @@
 <template>
   <div class="match-list-container">
-    <div v-if="loading" class="loading">Caricamento risultati...</div>
-    
-    <div v-else v-for="group in groupedMatches" :key="group.name" class="league-group animate-fade-in">
+    <div v-for="group in groupedMatches" :key="group.name" class="league-group animate-fade-in">
       <div class="league-header">
         <button class="fav-btn" @click.stop="toggleFavorite(group.name)">
           <Star :size="16" :class="{ active: group.isFavorite }" :fill="group.isFavorite ? 'gold' : 'none'" stroke="currentColor" />
