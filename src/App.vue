@@ -1,6 +1,6 @@
 <template>
   <div class="app-container">
-    <Header />
+    <Header v-model:teamSearch="teamSearch" />
     <div class="main-layout">
       <Sidebar class="sidebar" :activeFilter="activeFilter" @filter="handleFilter" />
       <main class="content">
@@ -36,6 +36,7 @@
           :filter="currentFilter" 
           :activeFilter="activeFilter" 
           :selectedDate="selectedDate"
+          :teamSearch="teamSearch"
           @select-match="selectedMatch = $event"
         />
       </main>
@@ -70,6 +71,7 @@ const currentFilter = ref('TUTTI');
 const activeFilter = ref({ type: 'all', value: null });
 const filterOptions = ['TUTTI', 'LIVE', 'CONCLUSI', 'PROGRAMMATE'];
 const selectedDate = ref(new Date()); // null = tutte le date
+const teamSearch = ref('');
 const selectedMatch = ref(null);
 // Storico degli ultimi 10 gol segnati (con timestamp)
 const recentGoals = ref([]);

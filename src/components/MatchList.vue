@@ -37,7 +37,8 @@ const props = defineProps({
     type: Object,
     default: () => ({ type: 'all', value: null })
   },
-  selectedDate: Date
+  selectedDate: Date,
+  teamSearch: { type: String, default: '' }
 });
 
 defineEmits(['select-match']);
@@ -226,6 +227,15 @@ const groupedMatches = computed(() => {
   if (props.filter === 'LIVE') filtered = filtered.filter(m => m.status === 'LIVE');
   if (props.filter === 'CONCLUSI') filtered = filtered.filter(m => m.status === 'FINISHED');
   if (props.filter === 'PROGRAMMATE') filtered = filtered.filter(m => m.status === 'SCHEDULED');
+
+  // Filtro per nome squadra
+  const q = (props.teamSearch || '').trim().toLowerCase();
+  if (q) {
+    filtered = filtered.filter(m =>
+      (m.homeTeam?.name || '').toLowerCase().includes(q) ||
+      (m.awayTeam?.name || '').toLowerCase().includes(q)
+    );
+  }
 
   // Group by league
   const groups = filtered.reduce((acc, m) => {

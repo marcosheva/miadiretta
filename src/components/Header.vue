@@ -12,7 +12,26 @@
         <a href="#">Volley</a>
       </nav>
       <div class="header-actions">
-        <Search class="action-icon" />
+        <div class="search-bar">
+          <Search class="search-icon" size="18" />
+          <input
+            :value="teamSearch"
+            @input="$emit('update:teamSearch', ($event.target).value)"
+            type="text"
+            class="search-input"
+            placeholder="Cerca squadra..."
+            aria-label="Cerca squadra"
+          />
+          <button
+            v-if="teamSearch"
+            type="button"
+            class="search-clear"
+            @click="$emit('update:teamSearch', '')"
+            aria-label="Cancella"
+          >
+            ×
+          </button>
+        </div>
         <User class="action-icon" />
         <button class="btn-primary">LOGIN</button>
       </div>
@@ -22,6 +41,12 @@
 
 <script setup>
 import { Trophy, Search, User } from 'lucide-vue-next';
+
+defineProps({
+  teamSearch: { type: String, default: '' }
+});
+
+defineEmits(['update:teamSearch']);
 </script>
 
 <style scoped>
@@ -94,7 +119,66 @@ import { Trophy, Search, User } from 'lucide-vue-next';
 .header-actions {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 16px;
+}
+
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 14px;
+  min-width: 200px;
+  max-width: 280px;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.search-bar:focus-within {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(0, 135, 78, 0.2);
+}
+
+.search-bar .search-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.search-bar:focus-within .search-icon {
+  color: var(--primary);
+}
+
+.search-bar .search-input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  font-size: 0.9rem;
+  color: var(--text-main);
+  outline: none;
+  min-width: 0;
+}
+
+.search-bar .search-input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+.search-bar .search-clear {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 4px;
+}
+
+.search-bar .search-clear:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .action-icon {
