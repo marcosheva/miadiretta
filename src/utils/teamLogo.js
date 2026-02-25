@@ -1,12 +1,17 @@
+import API_URL from '../config/api';
+
 /**
  * URL del logo squadra: preferisce i file locali in team_images/ (id squadra = nome file .png),
  * altrimenti usa l'URL CDN (team.logo).
- * @param {{ id?: string, logo?: string } | null} team - oggetto con id e/o logo
- * @returns {string} URL da usare come src dell'img
+ * In produzione usa l'URL completo del backend per team_images (frontend su altro dominio).
  */
 export function teamLogoUrl(team) {
   if (!team) return '';
-  if (team.id) return `/team_images/${team.id}.png`;
+  if (team.id) {
+    const path = `/team_images/${team.id}.png`;
+    const base = (typeof API_URL === 'string' && API_URL.trim()) ? API_URL.replace(/\/$/, '') : '';
+    return base ? `${base}${path}` : path;
+  }
   return team.logo || '';
 }
 
