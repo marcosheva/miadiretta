@@ -1,7 +1,8 @@
 const mongoose = require('mongoose');
 
 const MatchSchema = new mongoose.Schema({
-  eventId: { type: String, unique: true, sparse: true }, // BetsAPI Event ID
+  eventId: { type: String, unique: true, sparse: true }, // BetsAPI Event ID (generic)
+  bet365FixtureId: String, // FI da bet365/upcoming, usato per prematch quote
   sport: { type: String, required: true, default: 'Football' },
   league: { type: String, required: true },
   leagueId: String,
@@ -13,11 +14,13 @@ const MatchSchema = new mongoose.Schema({
   minute: String, // For live matches
   homeTeam: {
     name: { type: String, required: true },
+    id: String,   // team/image_id per loghi locali (team_images/ID.png)
     logo: String,
     score: { type: Number, default: 0 }
   },
   awayTeam: {
     name: { type: String, required: true },
+    id: String,
     logo: String,
     score: { type: Number, default: 0 }
   },
@@ -26,6 +29,8 @@ const MatchSchema = new mongoose.Schema({
     draw: Number,
     away: Number
   },
+  oddsOverUnder25: { over: Number, under: Number },
+  oddsBtts: { yes: Number, no: Number },
   events: [mongoose.Schema.Types.Mixed]
 }, { timestamps: true });
 

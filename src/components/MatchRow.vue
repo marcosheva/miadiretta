@@ -2,7 +2,7 @@
   <div
     class="match-row animate-fade-in"
     :class="{ 'goal-highlight': highlight }"
-    :style="{ gridTemplateColumns: match.odds ? '100px minmax(0, 1fr) 180px' : '100px minmax(0, 1fr)' }"
+    :style="{ gridTemplateColumns: match.status === 'SCHEDULED' ? '100px minmax(0, 1fr) 180px' : '100px minmax(0, 1fr)' }"
     @click="$emit('select', match)"
   >
     <div class="match-time-status">
@@ -16,7 +16,13 @@
 
     <div class="match-main">
       <div class="team home">
-        <img v-if="match.homeTeam?.logo" :src="match.homeTeam.logo" class="team-logo" :alt="match.homeTeam.name" />
+        <img
+          v-if="hasTeamLogo(match.homeTeam)"
+          :src="teamLogoUrl(match.homeTeam)"
+          class="team-logo"
+          :alt="match.homeTeam.name"
+          @error="($e) => $e.target.src = (match.homeTeam?.logo || '')"
+        />
         <span class="team-name" :class="{ winner: isWinner(match.homeTeam.score, match.awayTeam.score) }">
           {{ match.homeTeam.name }}
         </span>
@@ -35,38 +41,68 @@
         <span class="team-name" :class="{ winner: isWinner(match.awayTeam.score, match.homeTeam.score) }">
           {{ match.awayTeam.name }}
         </span>
-        <img v-if="match.awayTeam?.logo" :src="match.awayTeam.logo" class="team-logo" :alt="match.awayTeam.name" />
+        <img
+          v-if="hasTeamLogo(match.awayTeam)"
+          :src="teamLogoUrl(match.awayTeam)"
+          class="team-logo"
+          :alt="match.awayTeam.name"
+          @error="($e) => $e.target.src = (match.awayTeam?.logo || '')"
+        />
       </div>
     </div>
     
-    <div class="match-odds" v-if="match.odds">
-      <div class="odd-box">
+    <div class="match-odds" v-if="match.status === 'SCHEDULED'" @click.stop>
+      <div
+        class="odd-box"
+        :class="{ clickable: oddNum(match.odds?.home), selected: selectedOutcome === '1' }"
+        @click="onOddClick('1', match.odds?.home)"
+      >
         <span class="odd-label">1</span>
-        <span class="odd-val">{{ match.odds.home || '-' }}</span>
+        <span class="odd-val">{{ match.odds?.home ?? '-' }}</span>
       </div>
-      <div class="odd-box" v-if="match.odds.draw">
+      <div
+        class="odd-box"
+        :class="{ clickable: oddNum(match.odds?.draw), selected: selectedOutcome === 'X' }"
+        @click="onOddClick('X', match.odds?.draw)"
+      >
         <span class="odd-label">X</span>
-        <span class="odd-val">{{ match.odds.draw || '-' }}</span>
+        <span class="odd-val">{{ match.odds?.draw ?? '-' }}</span>
       </div>
-      <div class="odd-box">
+      <div
+        class="odd-box"
+        :class="{ clickable: oddNum(match.odds?.away), selected: selectedOutcome === '2' }"
+        @click="onOddClick('2', match.odds?.away)"
+      >
         <span class="odd-label">2</span>
-        <span class="odd-val">{{ match.odds.away || '-' }}</span>
+        <span class="odd-val">{{ match.odds?.away ?? '-' }}</span>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
+import { teamLogoUrl, hasTeamLogo } from '../utils/teamLogo';
+
 const props = defineProps({
   match: Object,
-  // true quando c'è stato un gol recente su questo match
-  highlight: {
-    type: Boolean,
-    default: false
-  }
+  highlight: { type: Boolean, default: false },
+  // '1' | 'X' | '2' se questa partita è in schedina con quella quota
+  selectedOutcome: { type: String, default: null }
 });
 
-defineEmits(['select']);
+const emit = defineEmits(['select', 'add-to-slip']);
+
+function oddNum(val) {
+  if (val == null) return false;
+  const n = Number(val);
+  return !Number.isNaN(n) && n > 0;
+}
+
+function onOddClick(outcome, oddVal) {
+  if (!oddNum(oddVal) || !props.match) return;
+  const odd = Number(oddVal);
+  emit('add-to-slip', { match: props.match, outcome, odd });
+}
 
 const formatTime = (dateStr) => {
   const date = new Date(dateStr);
@@ -295,7 +331,32 @@ const isWinner = (s1, s2) => s1 > s2;
   transition: border-color 0.2s;
 }
 
-.match-row:hover .odd-box {
+.odd-box.clickable {
+  cursor: pointer;
+}
+
+.odd-box.clickable:hover {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.06);
+  transform: translateY(-1px);
+}
+
+.odd-box.selected {
+  border-color: var(--accent);
+  background: rgba(255, 193, 7, 0.12);
+  color: var(--text-main);
+}
+
+.odd-box.selected .odd-val {
+  color: var(--accent);
+}
+
+.odd-box.selected:hover {
+  background: rgba(255, 193, 7, 0.18);
+  border-color: var(--accent);
+}
+
+.match-row:hover .odd-box:not(.selected) {
   border-color: #444;
 }
 

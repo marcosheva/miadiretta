@@ -85,7 +85,8 @@ import API_URL from '../config/api';
 const props = defineProps({
   show: Boolean,
   leagueName: { type: String, default: '' },
-  leagueId: { type: [String, Number], default: '' }
+  leagueId: { type: [String, Number], default: '' },
+  country: { type: String, default: '' }
 });
 
 const emit = defineEmits(['close']);
@@ -217,7 +218,12 @@ const fetchTable = async () => {
   tableRows.value = [];
   try {
     const id = props.leagueId != null ? String(props.leagueId) : '';
-    const res = await axios.get(`${API_URL}/api/league/${id}/table`);
+    const params = new URLSearchParams();
+    if (props.leagueName) params.set('leagueName', props.leagueName);
+    if (props.country) params.set('country', props.country);
+    const qs = params.toString();
+    const url = qs ? `${API_URL}/api/league/${id}/table?${qs}` : `${API_URL}/api/league/${id}/table`;
+    const res = await axios.get(url);
     const data = res.data;
     rawData.value = data;
     const rows = extractTableRows(data);

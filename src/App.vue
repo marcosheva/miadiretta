@@ -44,8 +44,10 @@
           :selectedDate="selectedDate"
           :teamSearch="teamSearch"
           :hiddenLeagues="hiddenLeagues"
+          :slipSelections="slipSelections"
           @select-match="selectedMatch = $event"
           @show-table="leagueForTable = $event"
+          @add-to-slip="addToSlip"
         />
       </main>
       <aside class="right-panel">
@@ -54,6 +56,40 @@
           @click="selectedMatch = $event"
         />
       </aside>
+    </div>
+
+    <div class="cart-float">
+      <Transition name="cart-slide">
+        <div v-show="slipCartOpen" class="cart-panel" :class="{ enlarged: slipCartEnlarged }">
+          <div class="cart-panel-actions">
+            <button type="button" class="cart-panel-btn" :title="slipCartEnlarged ? 'Riduci' : 'Ingrandisci'" @click="slipCartEnlarged = !slipCartEnlarged">
+              <Minimize2 v-if="slipCartEnlarged" size="18" />
+              <Maximize2 v-else size="18" />
+            </button>
+            <button type="button" class="cart-panel-btn cart-panel-close" title="Chiudi" @click="slipCartOpen = false">
+              <X size="20" />
+            </button>
+          </div>
+          <SchedinaCart
+            :selections="slipSelections"
+            :totalOdds="slipTotalOdds"
+            :enlarged="slipCartEnlarged"
+            @remove="removeFromSlip"
+            @clear="slipSelections = []"
+          />
+        </div>
+      </Transition>
+      <button
+        type="button"
+        class="cart-toggle"
+        :class="{ open: slipCartOpen }"
+        :title="slipCartOpen ? 'Chiudi schedina' : 'Apri schedina'"
+        @click="slipCartOpen = !slipCartOpen"
+      >
+        <ShoppingCart size="22" />
+        <span class="cart-toggle-label">Schedina</span>
+        <span v-if="slipSelections.length > 0" class="cart-toggle-badge">{{ slipSelections.length }}</span>
+      </button>
     </div>
 
     <MatchDetailModal 
@@ -68,6 +104,7 @@
       :show="!!leagueForTable"
       :leagueName="leagueForTable?.name"
       :leagueId="leagueForTable?.leagueId"
+      :country="leagueForTable?.country"
       @close="leagueForTable = null"
     />
   </div>
@@ -75,13 +112,14 @@
 
 <script setup>
 import { ref, computed, provide } from 'vue';
-import { ChevronLeft, ChevronRight, Calendar } from 'lucide-vue-next';
+import { ChevronLeft, ChevronRight, Calendar, X, ShoppingCart, Maximize2, Minimize2 } from 'lucide-vue-next';
 import Header from './components/Header.vue';
 import Sidebar from './components/Sidebar.vue';
 import MatchList from './components/MatchList.vue';
 import MatchDetailModal from './components/MatchDetailModal.vue';
 import LeagueTableModal from './components/LeagueTableModal.vue';
 import GoalEventsPanel from './components/GoalEventsPanel.vue';
+import SchedinaCart from './components/SchedinaCart.vue';
 
 const currentFilter = ref('TUTTI');
 const activeFilter = ref({ type: 'all', value: null });
@@ -90,6 +128,34 @@ const selectedDate = ref(new Date()); // null = tutte le date
 const teamSearch = ref('');
 const selectedMatch = ref(null);
 const leagueForTable = ref(null);
+
+const slipCartOpen = ref(false);
+const slipCartEnlarged = ref(false);
+const slipSelections = ref([]);
+const slipTotalOdds = computed(() => {
+  const list = slipSelections.value;
+  if (!list.length) return 0;
+  return list.reduce((acc, s) => acc * s.odd, 1);
+});
+
+function addToSlip({ match, outcome, odd }) {
+  const id = `${match.eventId}-${outcome}`;
+  const homeName = match.homeTeam?.name || 'Casa';
+  const awayName = match.awayTeam?.name || 'Trasferta';
+  const outcomeLabel = outcome;
+  const newItem = { id, eventId: match.eventId, homeName, awayName, outcome, outcomeLabel, odd };
+  const idx = slipSelections.value.findIndex((s) => s.eventId === match.eventId);
+  if (idx >= 0) {
+    slipSelections.value = slipSelections.value.slice(0, idx).concat([newItem], slipSelections.value.slice(idx + 1));
+  } else {
+    slipSelections.value = [...slipSelections.value, newItem];
+  }
+  slipCartOpen.value = true;
+}
+
+function removeFromSlip(id) {
+  slipSelections.value = slipSelections.value.filter((s) => s.id !== id);
+}
 
 const DARK_MODE_KEY = 'darkMode';
 const darkMode = ref(localStorage.getItem(DARK_MODE_KEY) !== 'false');
@@ -381,5 +447,116 @@ const nextDay = () => {
   .sidebar {
     display: none;
   }
+}
+
+/* Carrello schedina in basso a destra */
+.cart-float {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 900;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.cart-panel {
+  position: relative;
+  width: 340px;
+  max-width: calc(100vw - 40px);
+  max-height: 70vh;
+  overflow: hidden;
+  border-radius: 14px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border);
+  transition: max-height 0.25s ease;
+}
+
+.cart-panel.enlarged {
+  max-height: 88vh;
+}
+
+.cart-panel-actions {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  display: flex;
+  gap: 6px;
+}
+
+.cart-panel-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-dark);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+.cart-panel-btn:hover {
+  background: var(--glass);
+  color: var(--text-main);
+}
+
+.cart-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border: none;
+  border-radius: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  color: var(--text-main);
+  font-weight: 700;
+  font-size: 0.9rem;
+  cursor: pointer;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.cart-toggle:hover {
+  background: var(--glass);
+  border-color: var(--accent);
+}
+
+.cart-toggle.open {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.cart-toggle-label {
+  font-family: 'Outfit', sans-serif;
+}
+
+.cart-toggle-badge {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.8rem;
+}
+
+.cart-slide-enter-active,
+.cart-slide-leave-active {
+  transition: transform 0.25s ease, opacity 0.25s ease;
+}
+
+.cart-slide-enter-from,
+.cart-slide-leave-to {
+  transform: translateY(10px);
+  opacity: 0;
 }
 </style>

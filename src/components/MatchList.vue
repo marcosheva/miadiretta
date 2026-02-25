@@ -9,7 +9,7 @@
           type="button"
           class="league-name-btn"
           title="Apri classifica"
-          @click.stop="$emit('show-table', { name: group.name, leagueId: group.leagueId || null })"
+          @click.stop="$emit('show-table', { name: group.name, leagueId: group.leagueId || null, country: group.country || null })"
         >
           {{ group.name }}
         </button>
@@ -21,7 +21,9 @@
           :key="match._id"
           :match="match"
           :highlight="!!goalHighlights[match._id]"
+          :selectedOutcome="getSelectedOutcome(match)"
           @select="$emit('select-match', $event)"
+          @add-to-slip="$emit('add-to-slip', $event)"
         />
       </template>
     </div>
@@ -49,10 +51,17 @@ const props = defineProps({
   },
   selectedDate: Date,
   teamSearch: { type: String, default: '' },
-  hiddenLeagues: { type: Array, default: () => [] }
+  hiddenLeagues: { type: Array, default: () => [] },
+  slipSelections: { type: Array, default: () => [] }
 });
 
-defineEmits(['select-match', 'show-table']);
+function getSelectedOutcome(match) {
+  if (!match?.eventId || !props.slipSelections?.length) return null;
+  const s = props.slipSelections.find((x) => String(x.eventId) === String(match.eventId));
+  return s?.outcome ?? null;
+}
+
+defineEmits(['select-match', 'show-table', 'add-to-slip']);
 
 const matches = ref([]);
 const loading = ref(true);
@@ -221,6 +230,7 @@ const fetchMatches = async () => {
     stableMatches.value = newStable;
 
     matches.value = data;
+    fetchPrematchOddsInBackground(data);
   } catch (err) {
     console.error('Error fetching matches:', err);
     matches.value = []; // Set to empty array on error
@@ -228,6 +238,37 @@ const fetchMatches = async () => {
     loading.value = false;
   }
 };
+
+const CONCURRENT_ODDS = 5;
+function fetchPrematchOddsInBackground(matchList) {
+  const needOdds = (matchList || matches.value).filter(
+    (m) => m?.status === 'SCHEDULED' && m?.eventId && (!m.odds || (m.odds?.home == null && m.odds?.draw == null && m.odds?.away == null))
+  );
+  if (needOdds.length === 0) return;
+
+  const runBatch = async (batch) => {
+    const results = await Promise.allSettled(
+      batch.map((m) => axios.get(`${API_URL}/api/match/${m.eventId}/odds`))
+    );
+    results.forEach((out, i) => {
+      if (out.status !== 'fulfilled' || !out.value?.data?.main) return;
+      const m = batch[i];
+      const main = out.value.data.main;
+      const odds = { home: main['1'], draw: main['X'], away: main['2'] };
+      const idx = matches.value.findIndex((x) => String(x?.eventId) === String(m?.eventId));
+      if (idx >= 0) {
+        matches.value = matches.value.map((x, j) => (j === idx ? { ...x, odds } : x));
+      }
+    });
+  };
+
+  (async () => {
+    for (let i = 0; i < needOdds.length; i += CONCURRENT_ODDS) {
+      await runBatch(needOdds.slice(i, i + CONCURRENT_ODDS));
+      if (i + CONCURRENT_ODDS < needOdds.length) await new Promise((r) => setTimeout(r, 300));
+    }
+  })();
+}
 
 const groupedMatches = computed(() => {
   let filtered = matches.value;
@@ -302,6 +343,7 @@ const groupedMatches = computed(() => {
         matches: matchList,
         matchesByDate: groupMatchesByDate(matchList),
         leagueId: matchList[0]?.leagueId || null,
+        country: matchList[0]?.country || null,
         isFavorite: favorites.value.includes(name)
       };
     })
@@ -315,8 +357,8 @@ const groupedMatches = computed(() => {
 onMounted(fetchMatches);
 watch(() => [props.filter, props.activeFilter, props.selectedDate], fetchMatches, { deep: true });
 
-// Refresh live matches every 30 seconds
-setInterval(fetchMatches, 30000);
+// Refresh ogni 20s (allineato alla sync live del backend)
+setInterval(fetchMatches, 20000);
 </script>
 
 <style scoped>

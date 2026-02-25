@@ -53,30 +53,34 @@ async function syncMatches() {
       }
     }
 
-    // 3. Fetch Ended Matches: oggi + 6 giorni fa, fino a 100 pagine/giorno (Serie A ecc. in pagine alte)
-    console.log('Fetching ended matches (last 7 days, up to 100 pages/day)...');
-    const ENDED_DAYS_BACK = 7;
+    // 3. Fetch Ended: ultimi 10 giorni sia in UTC sia in ora Italia (Europe/Rome)
+    console.log('Fetching ended matches (last 10 days, UTC + Rome, up to 100 pages/day)...');
+    const ENDED_DAYS_BACK = 10;
     const ENDED_MAX_PAGES_PER_DAY = 100;
+    const daysToRequest = new Set();
+    const now = Date.now();
     for (let daysAgo = 0; daysAgo < ENDED_DAYS_BACK; daysAgo++) {
-      const d = new Date();
-      d.setDate(d.getDate() - daysAgo);
-      const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dayNum = String(d.getDate()).padStart(2, '0');
-      const day = `${y}${m}${dayNum}`;
+      const d = new Date(now - daysAgo * 24 * 60 * 60 * 1000);
+      daysToRequest.add(`${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`);
+      const sRome = d.toLocaleDateString('en-CA', { timeZone: 'Europe/Rome' });
+      if (sRome) daysToRequest.add(sRome.replace(/-/g, ''));
+    }
+    for (const day of [...daysToRequest].sort()) {
       let dayTotal = 0;
       for (let page = 1; page <= ENDED_MAX_PAGES_PER_DAY; page++) {
         try {
-          await wait(300);
+          await wait(280);
           const endedRes = await axios.get(`https://api.b365api.com/v1/events/ended?sport_id=1&token=${TOKEN}&day=${day}&page=${page}`);
           const endedItems = endedRes.data.results || [];
           allEvents.push(...endedItems);
           dayTotal += endedItems.length;
           if (endedItems.length < 50) break;
         } catch (e) {
-          console.error('Error fetching ended matches:', e.message);
+          console.error('Error fetching ended day=', day, e.message);
           break;
         }
       }
-      if (dayTotal > 0) console.log(`Ended (${daysAgo === 0 ? 'today' : daysAgo + ' day(s) ago'}): ${dayTotal} matches`);
+      if (dayTotal > 0) console.log(`Ended day=${day}: ${dayTotal} matches`);
     }
 
     // 4. Handle status transitions: Find matches in DB that are LIVE but no longer in liveEventIds
