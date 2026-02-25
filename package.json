@@ -8,6 +8,9 @@
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "client": "vite",
     "server": "cd backend && npm start",
+    "server:pm2": "pm2 start ecosystem.config.cjs",
+    "server:pm2:stop": "pm2 stop diretta-backend",
+    "server:pm2:logs": "pm2 logs diretta-backend",
     "build": "cd backend && npm install && cd .. && vite build",
     "serve": "vite preview"
   },

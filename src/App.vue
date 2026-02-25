@@ -1,6 +1,6 @@
 <template>
   <div class="app-container">
-    <Header v-model:teamSearch="teamSearch" />
+    <Header v-model:teamSearch="teamSearch" :darkMode="darkMode" @toggle-dark="toggleDarkMode" />
     <div class="main-layout">
       <Sidebar
           class="sidebar"
@@ -45,6 +45,7 @@
           :teamSearch="teamSearch"
           :hiddenLeagues="hiddenLeagues"
           @select-match="selectedMatch = $event"
+          @show-table="leagueForTable = $event"
         />
       </main>
       <aside class="right-panel">
@@ -62,6 +63,13 @@
       @close="selectedMatch = null"
     />
 
+    <LeagueTableModal
+      v-if="leagueForTable"
+      :show="!!leagueForTable"
+      :leagueName="leagueForTable?.name"
+      :leagueId="leagueForTable?.leagueId"
+      @close="leagueForTable = null"
+    />
   </div>
 </template>
 
@@ -72,6 +80,7 @@ import Header from './components/Header.vue';
 import Sidebar from './components/Sidebar.vue';
 import MatchList from './components/MatchList.vue';
 import MatchDetailModal from './components/MatchDetailModal.vue';
+import LeagueTableModal from './components/LeagueTableModal.vue';
 import GoalEventsPanel from './components/GoalEventsPanel.vue';
 
 const currentFilter = ref('TUTTI');
@@ -80,6 +89,19 @@ const filterOptions = ['TUTTI', 'LIVE', 'CONCLUSI', 'PROGRAMMATE'];
 const selectedDate = ref(new Date()); // null = tutte le date
 const teamSearch = ref('');
 const selectedMatch = ref(null);
+const leagueForTable = ref(null);
+
+const DARK_MODE_KEY = 'darkMode';
+const darkMode = ref(localStorage.getItem(DARK_MODE_KEY) !== 'false');
+const toggleDarkMode = () => {
+  darkMode.value = !darkMode.value;
+  localStorage.setItem(DARK_MODE_KEY, String(darkMode.value));
+  document.documentElement.setAttribute('data-theme', darkMode.value ? 'dark' : 'light');
+};
+// Applica tema al caricamento
+if (typeof document !== 'undefined') {
+  document.documentElement.setAttribute('data-theme', darkMode.value ? 'dark' : 'light');
+}
 
 const HIDDEN_LEAGUES_KEY = 'hiddenLeagues';
 const hiddenLeagues = ref(JSON.parse(localStorage.getItem(HIDDEN_LEAGUES_KEY) || '[]'));
@@ -235,11 +257,11 @@ const nextDay = () => {
   display: flex;
   align-items: center;
   gap: 2px;
-  background: #f8f9fa;
-  border: 1px solid #ddd;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 2px;
-  color: #333;
+  color: var(--text-main);
 }
 
 .nav-arrow {
@@ -247,7 +269,7 @@ const nextDay = () => {
   border: none;
   cursor: pointer;
   padding: 5px 8px;
-  color: #888;
+  color: var(--text-muted);
   display: flex;
   align-items: center;
   border-radius: 6px;
@@ -255,8 +277,8 @@ const nextDay = () => {
 }
 
 .nav-arrow:hover:not(:disabled) {
-  background: #eee;
-  color: #333;
+  background: var(--glass);
+  color: var(--text-main);
 }
 
 .nav-arrow:disabled {
@@ -272,8 +294,8 @@ const nextDay = () => {
   font-family: 'Outfit', sans-serif;
   font-weight: 700;
   font-size: 0.85rem;
-  border-left: 1px solid #eee;
-  border-right: 1px solid #eee;
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   cursor: pointer;
 }
 
@@ -291,8 +313,8 @@ const nextDay = () => {
 }
 
 .date-all-btn:hover {
-  background: #eee;
-  color: #333;
+  background: var(--glass);
+  color: var(--text-main);
 }
 
 .date-all-btn.active {
@@ -307,7 +329,7 @@ const nextDay = () => {
 }
 
 .cal-icon {
-  color: #333;
+  color: var(--text-main);
 }
 
 .filter-btn {

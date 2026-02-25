@@ -24,22 +24,39 @@ mongoose.connect(MONGODB_URI)
   })
   .catch(err => console.error('MongoDB connection error:', err));
 
+// Estrae punteggio da BetsAPI (ss può essere "1-2" o oggetto { "1": "0-1", "2": "1-2" } = HT/FT)
+function parseScore(ss) {
+  let homeScore = 0, awayScore = 0;
+  if (!ss) return { homeScore, awayScore };
+  let scoreStr = null;
+  if (typeof ss === 'string') {
+    scoreStr = ss.trim();
+  } else if (typeof ss === 'object' && ss !== null) {
+    const keys = Object.keys(ss).filter(k => /^\d+$/.test(k)).map(Number).sort((a, b) => a - b);
+    if (keys.length > 0) scoreStr = ss[String(keys[keys.length - 1])];
+  }
+  if (scoreStr && typeof scoreStr === 'string') {
+    const parts = scoreStr.split(/[-:]/).map(s => parseInt(s.trim(), 10));
+    if (parts.length >= 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
+      homeScore = parts[0];
+      awayScore = parts[1];
+    }
+  }
+  return { homeScore, awayScore };
+}
+
 // Helper: da evento BetsAPI a oggetto match e salvataggio in DB
 function buildMatchData(ev) {
-  let homeScore = 0, awayScore = 0;
-  if (ev.ss) {
-    const scores = ev.ss.split('-');
-    homeScore = parseInt(scores[0]) || 0;
-    awayScore = parseInt(scores[1]) || 0;
-  }
+  const { homeScore, awayScore } = parseScore(ev.ss);
+  const eventId = ev.id != null ? String(ev.id) : '';
   return {
-    eventId: ev.id,
+    eventId,
     sport: 'Football',
     league: ev.league?.name || 'Unknown League',
-    leagueId: ev.league?.id,
+    leagueId: ev.league_id != null ? String(ev.league_id) : (ev.league?.id != null ? String(ev.league.id) : undefined),
     country: ev.cc?.toUpperCase() || (ev.league?.name?.split(' ')[0]?.toUpperCase() || 'UN'),
     startTime: new Date(parseInt(ev.time) * 1000),
-    status: ev.timer ? 'LIVE' : (ev.ss && ev.ss.includes('-') && !ev.timer ? 'FINISHED' : 'SCHEDULED'),
+    status: ev.timer ? 'LIVE' : (ev.ss && !ev.timer ? 'FINISHED' : 'SCHEDULED'),
     minute: ev.timer?.tm ? `${ev.timer.tm}'` : '',
     homeTeam: {
       name: ev.home?.name || 'Home',
@@ -57,11 +74,27 @@ function buildMatchData(ev) {
 async function saveEventToDb(ev) {
   if (!ev.time) return;
   const matchData = buildMatchData(ev);
-  await Match.findOneAndUpdate(
-    { eventId: matchData.eventId },
-    matchData,
-    { upsert: true }
-  );
+  const eid = matchData.eventId;
+  if (!eid) return;
+  const query = /^\d+$/.test(eid) ? { $or: [{ eventId: eid }, { eventId: parseInt(eid, 10) }] } : { eventId: eid };
+  await Match.findOneAndUpdate(query, { ...matchData, eventId: eid }, { upsert: true });
+}
+
+// Recupera da BetsAPI il risultato finale di una partita (event/view) e aggiorna il DB
+async function fetchAndSaveFinishedMatch(eventId) {
+  const TOKEN = process.env.BETSAPI_TOKEN;
+  if (!TOKEN) return false;
+  try {
+    const viewRes = await axios.get(`https://api.b365api.com/v1/event/view?event_id=${eventId}&token=${TOKEN}`);
+    const ev = viewRes.data.results?.[0];
+    if (ev && ev.time) {
+      await saveEventToDb(ev);
+      return true;
+    }
+  } catch (e) {
+    // ignore: endpoint può fallire per eventi appena chiusi
+  }
+  return false;
 }
 
 // Sync solo LIVE: 1 richiesta, aggiorna punteggi/minuti e marca FINISHED chi non è più live
@@ -78,8 +111,12 @@ async function syncLiveOnly() {
     const dbLiveMatches = await Match.find({ status: 'LIVE' });
     for (const dbMatch of dbLiveMatches) {
       if (dbMatch.eventId && !liveEventIds.has(dbMatch.eventId)) {
-        dbMatch.status = 'FINISHED';
-        await dbMatch.save();
+        // Aggiorna subito il risultato finale da BetsAPI invece di lasciare l'ultimo punteggio live
+        const updated = await fetchAndSaveFinishedMatch(dbMatch.eventId);
+        if (!updated) {
+          dbMatch.status = 'FINISHED';
+          await dbMatch.save();
+        }
       }
     }
 
@@ -91,7 +128,7 @@ async function syncLiveOnly() {
 }
 
 // Sync completa: inplay + upcoming + ended (per nuove partite e risultati finiti)
-const FULL_SYNC_INTERVAL_MS = 3 * 60 * 1000; // 3 minuti
+const FULL_SYNC_INTERVAL_MS = 2 * 60 * 1000; // 2 minuti (risultati ended più allineati a BetsAPI)
 const UPCOMING_PAGES = 20; // pagine upcoming
 
 async function syncFromAPI() {
@@ -125,19 +162,87 @@ async function syncFromAPI() {
       } catch (e) { break; }
     }
 
-    try {
-      const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
-      const endedRes = await axios.get(`https://api.b365api.com/v1/events/ended?sport_id=1&token=${TOKEN}&day=${today}`);
-      allEvents.push(...(endedRes.data.results || []));
-    } catch (e) { }
+    // Ended: oggi + fino a 6 giorni fa, con paginazione (fino a 100 pagine/giorno = ~5000 partite)
+    // Serie A e altre leghe possono essere in pagine alte: 25 non bastavano
+    const ENDED_DAYS_BACK = 7;
+    const ENDED_MAX_PAGES_PER_DAY = 100;  // max BetsAPI, così non perdiamo leghe (es. Serie A)
+    for (let daysAgo = 0; daysAgo < ENDED_DAYS_BACK; daysAgo++) {
+      const d = new Date();
+      d.setDate(d.getDate() - daysAgo);
+      const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dayNum = String(d.getDate()).padStart(2, '0');
+      const day = `${y}${m}${dayNum}`;
+      let dayTotal = 0;
+      for (let page = 1; page <= ENDED_MAX_PAGES_PER_DAY; page++) {
+        try {
+          await wait(280);
+          const endedRes = await axios.get(`https://api.b365api.com/v1/events/ended?sport_id=1&token=${TOKEN}&day=${day}&page=${page}`);
+          const ended = endedRes.data.results || [];
+          allEvents.push(...ended);
+          dayTotal += ended.length;
+          if (ended.length < 50) break;
+        } catch (e) {
+          if (daysAgo === 0 && page === 1) console.error('Error fetching ended:', e.message);
+          break;
+        }
+      }
+      if (dayTotal > 0 && daysAgo > 0) console.log(`Ended (${daysAgo} day(s) ago): ${dayTotal} eventi`);
+    }
+
+    // Ended per leghe prioritarie (Serie A ecc.): così i risultati non restano "fermi" anche se in pagine alte
+    const PRIORITY_LEAGUE_IDS = [199]; // 199 = Italy Serie A (altri: 152 Premier, 302 La Liga, ...)
+    for (const leagueId of PRIORITY_LEAGUE_IDS) {
+      for (let daysAgo = 0; daysAgo < 7; daysAgo++) {
+        const d = new Date();
+        d.setDate(d.getDate() - daysAgo);
+        const day = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+        try {
+          await wait(250);
+          const res = await axios.get(`https://api.b365api.com/v1/events/ended?sport_id=1&token=${TOKEN}&day=${day}&league_id=${leagueId}`);
+          const list = res.data.results || [];
+          if (list.length > 0) {
+            allEvents.push(...list);
+            console.log(`Ended league ${leagueId} (${daysAgo}d fa): ${list.length} eventi`);
+          }
+        } catch (e) { /* ignore */ }
+      }
+    }
 
     const dbLiveMatches = await Match.find({ status: 'LIVE' });
     for (const dbMatch of dbLiveMatches) {
       if (dbMatch.eventId && !liveEventIds.has(dbMatch.eventId)) {
-        dbMatch.status = 'FINISHED';
-        await dbMatch.save();
+        const updated = await fetchAndSaveFinishedMatch(dbMatch.eventId);
+        if (!updated) {
+          dbMatch.status = 'FINISHED';
+          await dbMatch.save();
+        }
       }
     }
+
+    // Recupero: partite ancora LIVE nel DB ma iniziate da più di 2.5 ore (es. server era spento quando è finita)
+    const staleThreshold = new Date(Date.now() - 2.5 * 60 * 60 * 1000);
+    const staleLive = await Match.find({ status: 'LIVE', startTime: { $lt: staleThreshold } });
+    for (const m of staleLive) {
+      if (m.eventId) {
+        const updated = await fetchAndSaveFinishedMatch(m.eventId);
+        if (updated) console.log(`Recuperato risultato finale: ${m.homeTeam?.name} - ${m.awayTeam?.name}`);
+        await new Promise(r => setTimeout(r, 400));
+      }
+    }
+
+    // Refresh risultati: TUTTE le partite FINISHED degli ultimi 7 giorni da BetsAPI
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const finishedRecent = await Match.find({
+      status: 'FINISHED',
+      startTime: { $gte: sevenDaysAgo },
+      eventId: { $exists: true, $ne: null, $ne: '' }
+    }).sort({ startTime: -1 });
+    for (const m of finishedRecent) {
+      if (m.eventId) {
+        await fetchAndSaveFinishedMatch(m.eventId);
+        await new Promise(r => setTimeout(r, 320));
+      }
+    }
+    if (finishedRecent.length > 0) console.log(`Refresh risultati: ${finishedRecent.length} partite (ultimi 7 gg)`);
 
     console.log(`Full sync: ${allEvents.length} events`);
     for (const ev of allEvents) await saveEventToDb(ev);
@@ -176,13 +281,14 @@ app.get('/api/leagues', async (req, res) => {
       {
         $group: {
           _id: { country: "$country", league: "$league" },
-          count: { $sum: 1 }
+          count: { $sum: 1 },
+          leagueId: { $first: "$leagueId" }
         }
       },
       {
         $group: {
           _id: "$_id.country",
-          leagues: { $push: { name: "$_id.league", count: "$count" } }
+          leagues: { $push: { name: "$_id.league", count: "$count", leagueId: "$leagueId" } }
         }
       },
       { $sort: { _id: 1 } }
@@ -191,6 +297,37 @@ app.get('/api/leagues', async (req, res) => {
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
+});
+
+app.get('/api/league/:leagueId/table', async (req, res) => {
+  const TOKEN = process.env.BETSAPI_TOKEN;
+  const { leagueId } = req.params;
+  if (!TOKEN || !leagueId) {
+    return res.status(400).json({ message: 'leagueId e token richiesti' });
+  }
+  const id = encodeURIComponent(leagueId);
+  const urls = [
+    `https://api.b365api.com/v3/league/table?token=${TOKEN}&league_id=${id}`,
+    `https://api.b365api.com/v1/league/table?token=${TOKEN}&league_id=${id}`
+  ];
+  let lastError = null;
+  for (const url of urls) {
+    try {
+      const apiRes = await axios.get(url);
+      const data = apiRes.data;
+      if (data && data.success === 0 && data.error) {
+        lastError = data.error;
+        continue;
+      }
+      if (data && (data.results != null || data.table != null || Array.isArray(data))) {
+        return res.json(data);
+      }
+      lastError = lastError || 'Risposta senza classifica';
+    } catch (err) {
+      lastError = err.response?.data?.error || err.response?.data?.message || err.message;
+    }
+  }
+  res.status(400).json({ message: lastError || 'Classifica non disponibile per questo campionato' });
 });
 
 app.get('/api/matches/live', async (req, res) => {

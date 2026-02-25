@@ -12,7 +12,7 @@
           :key="fav.name"
           class="favorite-item"
           :class="{ active: activeFilter?.type === 'league' && activeFilter?.value === fav.name }"
-          @click="selectLeague(fav.name)"
+          @click="selectLeague(fav)"
         >
           <img :src="getFlag(fav.cc)" class="favorite-flag" :alt="fav.cc" />
           <span class="favorite-name">{{ fav.name }}</span>
@@ -60,7 +60,7 @@
               :key="league.name"
               class="league-item"
               :class="{ active: activeFilter?.type === 'league' && activeFilter?.value === league.name }"
-              @click.stop="selectLeague(league.name)"
+              @click.stop="selectLeague(league)"
             >
               <img :src="getFlag(country._id)" class="league-flag" :alt="country._id" />
               <span class="league-name">{{ league.name }}</span>
@@ -175,7 +175,17 @@ const favoriteLeaguesWithFlags = computed(() => {
   const hidden = props.hiddenLeagues || [];
   return favorites.value
     .filter((name) => !hidden.includes(name))
-    .map((name) => ({ name, cc: leagueToCountry.value[name] || null }))
+    .map((name) => {
+      let leagueId = null;
+      for (const c of leagueGroups.value) {
+        const league = (c.leagues || []).find((l) => l.name === name);
+        if (league?.leagueId) {
+          leagueId = league.leagueId;
+          break;
+        }
+      }
+      return { name, cc: leagueToCountry.value[name] || null, leagueId };
+    })
     .filter((f) => f.name);
 });
 
@@ -230,13 +240,15 @@ const toggleCountry = (country) => {
   }
 };
 
-const selectLeague = (leagueName) => {
-  // Se clicchi di nuovo lo stesso campionato, deseleziona
-  if (props.activeFilter?.type === 'league' && props.activeFilter?.value === leagueName) {
+const selectLeague = (leagueOrName) => {
+  const name = typeof leagueOrName === 'string' ? leagueOrName : leagueOrName?.name;
+  const leagueId = typeof leagueOrName === 'object' ? leagueOrName?.leagueId : null;
+  if (!name) return;
+  if (props.activeFilter?.type === 'league' && props.activeFilter?.value === name) {
     emit('filter', { type: 'all', value: null });
     return;
   }
-  emit('filter', { type: 'league', value: leagueName });
+  emit('filter', { type: 'league', value: name });
 };
 
 const resetFilter = () => {

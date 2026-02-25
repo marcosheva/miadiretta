@@ -186,7 +186,7 @@ const groupedEvents = computed(() => {
 .team-name {
   font-size: 1.1rem;
   font-weight: 700;
-  color: white;
+  color: var(--text-main);
   text-align: center;
 }
 
@@ -228,7 +228,7 @@ const groupedEvents = computed(() => {
 }
 
 .close-btn:hover {
-  color: white;
+  color: var(--text-main);
 }
 
 .modal-body {
@@ -278,7 +278,7 @@ const groupedEvents = computed(() => {
 }
 
 .event-row.goal .main-text {
-  color: white;
+  color: var(--text-main);
   font-weight: 700;
 }
 

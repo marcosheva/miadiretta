@@ -16,11 +16,12 @@
 
     <div class="match-main">
       <div class="team home">
+        <img v-if="match.homeTeam?.logo" :src="match.homeTeam.logo" class="team-logo" :alt="match.homeTeam.name" />
         <span class="team-name" :class="{ winner: isWinner(match.homeTeam.score, match.awayTeam.score) }">
           {{ match.homeTeam.name }}
         </span>
       </div>
-      
+
       <div class="score-container" v-if="match.status !== 'SCHEDULED'">
         <span class="score" :class="{ live: match.status === 'LIVE' }">{{ match.homeTeam.score }}</span>
         <span class="score-divider">-</span>
@@ -34,6 +35,7 @@
         <span class="team-name" :class="{ winner: isWinner(match.awayTeam.score, match.homeTeam.score) }">
           {{ match.awayTeam.name }}
         </span>
+        <img v-if="match.awayTeam?.logo" :src="match.awayTeam.logo" class="team-logo" :alt="match.awayTeam.name" />
       </div>
     </div>
     
@@ -185,8 +187,8 @@ const isWinner = (s1, s2) => s1 > s2;
 .match-main {
   display: flex;
   align-items: center;
-  gap: 15px;
-  padding: 0 20px;
+  gap: 10px;
+  padding: 0 12px;
   width: 100%;
   min-width: 0;
   overflow: hidden;
@@ -196,10 +198,32 @@ const isWinner = (s1, s2) => s1 > s2;
   flex: 1 1 0%;
   min-width: 0;
   overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.team.home { text-align: right; }
-.team.away { text-align: left; }
+/* Logo a sinistra, nome accanto al risultato */
+.team.home {
+  flex-direction: row;
+  justify-content: flex-end;
+}
+
+/* Nome accanto al risultato, logo a destra */
+.team.away {
+  flex-direction: row;
+  justify-content: flex-start;
+}
+
+.team-logo {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.team.home .team-logo { margin-right: 6px; }
+.team.away .team-logo { margin-left: 6px; }
 
 .team-name {
   display: block;
@@ -209,14 +233,16 @@ const isWinner = (s1, s2) => s1 > s2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .team-name.winner {
   font-weight: 700;
-  color: white;
+  color: var(--winner-name);
 }
 
 .score-container {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;

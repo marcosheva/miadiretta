@@ -32,6 +32,15 @@
             ×
           </button>
         </div>
+        <button
+          type="button"
+          class="theme-toggle"
+          :aria-label="darkMode ? 'Passa a tema chiaro' : 'Passa a tema scuro'"
+          @click="$emit('toggle-dark')"
+        >
+          <Sun v-if="darkMode" class="theme-icon" size="20" />
+          <Moon v-else class="theme-icon" size="20" />
+        </button>
         <User class="action-icon" />
         <button class="btn-primary">LOGIN</button>
       </div>
@@ -40,13 +49,14 @@
 </template>
 
 <script setup>
-import { Trophy, Search, User } from 'lucide-vue-next';
+import { Trophy, Search, User, Sun, Moon } from 'lucide-vue-next';
 
 defineProps({
-  teamSearch: { type: String, default: '' }
+  teamSearch: { type: String, default: '' },
+  darkMode: { type: Boolean, default: true }
 });
 
-defineEmits(['update:teamSearch']);
+defineEmits(['update:teamSearch', 'toggle-dark']);
 </script>
 
 <style scoped>
@@ -190,5 +200,28 @@ defineEmits(['update:teamSearch']);
 
 .action-icon:hover {
   color: var(--primary);
+}
+
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 10px;
+  background: var(--glass);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s;
+}
+
+.theme-toggle:hover {
+  color: var(--primary);
+  background: var(--glass);
+}
+
+.theme-icon {
+  flex-shrink: 0;
 }
 </style>

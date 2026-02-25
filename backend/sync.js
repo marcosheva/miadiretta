@@ -53,15 +53,31 @@ async function syncMatches() {
       }
     }
 
-    // 3. Fetch Ended Matches (Today)
-    console.log('Fetching ended matches...');
-    try {
-      const today = new Date().toISOString().split('T')[0].replace(/-/g, '');
-      const endedRes = await axios.get(`https://api.b365api.com/v1/events/ended?sport_id=1&token=${TOKEN}&day=${today}`);
-      const endedItems = endedRes.data.results || [];
-      allEvents.push(...endedItems);
-      console.log(`Added ${endedItems.length} ended matches`);
-    } catch (e) { console.error('Error fetching ended matches:', e.message); }
+    // 3. Fetch Ended Matches: oggi + 6 giorni fa, fino a 100 pagine/giorno (Serie A ecc. in pagine alte)
+    console.log('Fetching ended matches (last 7 days, up to 100 pages/day)...');
+    const ENDED_DAYS_BACK = 7;
+    const ENDED_MAX_PAGES_PER_DAY = 100;
+    for (let daysAgo = 0; daysAgo < ENDED_DAYS_BACK; daysAgo++) {
+      const d = new Date();
+      d.setDate(d.getDate() - daysAgo);
+      const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), dayNum = String(d.getDate()).padStart(2, '0');
+      const day = `${y}${m}${dayNum}`;
+      let dayTotal = 0;
+      for (let page = 1; page <= ENDED_MAX_PAGES_PER_DAY; page++) {
+        try {
+          await wait(300);
+          const endedRes = await axios.get(`https://api.b365api.com/v1/events/ended?sport_id=1&token=${TOKEN}&day=${day}&page=${page}`);
+          const endedItems = endedRes.data.results || [];
+          allEvents.push(...endedItems);
+          dayTotal += endedItems.length;
+          if (endedItems.length < 50) break;
+        } catch (e) {
+          console.error('Error fetching ended matches:', e.message);
+          break;
+        }
+      }
+      if (dayTotal > 0) console.log(`Ended (${daysAgo === 0 ? 'today' : daysAgo + ' day(s) ago'}): ${dayTotal} matches`);
+    }
 
     // 4. Handle status transitions: Find matches in DB that are LIVE but no longer in liveEventIds
     console.log('Checking for matches that should be marked as finished...');

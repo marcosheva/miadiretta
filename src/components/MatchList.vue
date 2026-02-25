@@ -5,15 +5,25 @@
         <button class="fav-btn" @click.stop="toggleFavorite(group.name)">
           <Star :size="16" :class="{ active: group.isFavorite }" :fill="group.isFavorite ? 'gold' : 'none'" stroke="currentColor" />
         </button>
-        <span class="league-name">{{ group.name }}</span>
+        <button
+          type="button"
+          class="league-name-btn"
+          title="Apri classifica"
+          @click.stop="$emit('show-table', { name: group.name, leagueId: group.leagueId || null })"
+        >
+          {{ group.name }}
+        </button>
       </div>
-      <MatchRow 
-        v-for="match in group.matches" 
-        :key="match._id" 
-        :match="match"
-        :highlight="!!goalHighlights[match._id]"
-        @select="$emit('select-match', $event)"
-      />
+      <template v-for="dateGroup in group.matchesByDate" :key="dateGroup.dateKey">
+        <div class="date-header">{{ dateGroup.dateLabel }}</div>
+        <MatchRow
+          v-for="match in dateGroup.matches"
+          :key="match._id"
+          :match="match"
+          :highlight="!!goalHighlights[match._id]"
+          @select="$emit('select-match', $event)"
+        />
+      </template>
     </div>
 
     <div v-if="!loading && groupedMatches.length === 0" class="no-results">
@@ -42,7 +52,7 @@ const props = defineProps({
   hiddenLeagues: { type: Array, default: () => [] }
 });
 
-defineEmits(['select-match']);
+defineEmits(['select-match', 'show-table']);
 
 const matches = ref([]);
 const loading = ref(true);
@@ -243,22 +253,63 @@ const groupedMatches = computed(() => {
 
   const hiddenSet = new Set(props.hiddenLeagues || []);
 
-  // Convert to array, escludi campionati nascosti, e ordina
+  const dayNames = ['Domenica', 'Lunedì', 'Martedì', 'Mercoledì', 'Giovedì', 'Venerdì', 'Sabato'];
+  const monthNames = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
+
+  function getDateKey(d) {
+    const x = new Date(d);
+    return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' + String(x.getDate()).padStart(2, '0');
+  }
+
+  function formatDateLabel(dateKey) {
+    const d = new Date(dateKey);
+    const today = new Date();
+    const todayKey = getDateKey(today);
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayKey = getDateKey(yesterday);
+    if (dateKey === todayKey) return 'Oggi';
+    if (dateKey === yesterdayKey) return 'Ieri';
+    const day = dayNames[d.getDay()];
+    const date = d.getDate();
+    const month = monthNames[d.getMonth()];
+    return `${day} ${date} ${month}`;
+  }
+
+  function groupMatchesByDate(matchList) {
+    const sorted = [...matchList].sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+    const byDate = sorted.reduce((acc, m) => {
+      const key = getDateKey(m.startTime);
+      if (!acc[key]) acc[key] = [];
+      acc[key].push(m);
+      return acc;
+    }, {});
+    return Object.keys(byDate)
+      .sort()
+      .map((dateKey) => ({
+        dateKey,
+        dateLabel: formatDateLabel(dateKey),
+        matches: byDate[dateKey]
+      }));
+  }
+
   return Object.keys(groups)
     .filter((name) => !hiddenSet.has(name))
-    .map((name) => ({
-      name,
-      matches: groups[name],
-      isFavorite: favorites.value.includes(name)
-    }))
+    .map((name) => {
+      const matchList = groups[name];
+      return {
+        name,
+        matches: matchList,
+        matchesByDate: groupMatchesByDate(matchList),
+        leagueId: matchList[0]?.leagueId || null,
+        isFavorite: favorites.value.includes(name)
+      };
+    })
     .sort((a, b) => {
-    // 1. Favorites first
-    if (a.isFavorite && !b.isFavorite) return -1;
-    if (!a.isFavorite && b.isFavorite) return 1;
-    
-    // 2. Alphabetical
-    return a.name.localeCompare(b.name);
-  });
+      if (a.isFavorite && !b.isFavorite) return -1;
+      if (!a.isFavorite && b.isFavorite) return 1;
+      return a.name.localeCompare(b.name);
+    });
 });
 
 onMounted(fetchMatches);
@@ -311,12 +362,36 @@ setInterval(fetchMatches, 30000);
   color: gold;
 }
 
-.league-name {
+.league-name-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
   font-size: 0.8rem;
   font-weight: 700;
   color: var(--primary);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  text-align: left;
+  transition: opacity 0.2s;
+}
+
+.league-name-btn:hover {
+  opacity: 0.85;
+  text-decoration: underline;
+}
+
+.date-header {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 10px 15px 6px;
+  margin-top: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.date-header:first-of-type {
+  margin-top: 0;
 }
 
 .loading, .no-results {
