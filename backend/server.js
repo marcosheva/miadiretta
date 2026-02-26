@@ -11,7 +11,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
 
-app.use(cors());
+app.use(cors({ origin: true, credentials: false }));
 app.use(express.json());
 // Loghi squadre locali (cartella team_images con file ID.png)
 app.use('/team_images', express.static(path.join(__dirname, '..', 'team_images')));

@@ -244,12 +244,28 @@ const fetchMatches = async () => {
   }
 };
 
-const CONCURRENT_ODDS = 5;
+// Quote in background: limite richieste e cooldown per evitare migliaia di chiamate (CORB / rate limit)
+const CONCURRENT_ODDS = 4;
+const MAX_ODDS_REQUESTS_PER_LOAD = 24;
+const ODDS_COOLDOWN_MS = 3 * 60 * 1000; // non ri-richiedere le quote per la stessa partita per 3 minuti
+const oddsRequestedAt = new Map(); // eventId -> timestamp
+
 function fetchPrematchOddsInBackground(matchList) {
   const needOdds = (matchList || matches.value).filter(
     (m) => m?.status === 'SCHEDULED' && m?.eventId && (!m.odds || (m.odds?.home == null && m.odds?.draw == null && m.odds?.away == null))
   );
   if (needOdds.length === 0) return;
+
+  const now = Date.now();
+  const toFetch = needOdds
+    .filter((m) => {
+      const t = oddsRequestedAt.get(String(m.eventId));
+      return !t || now - t > ODDS_COOLDOWN_MS;
+    })
+    .slice(0, MAX_ODDS_REQUESTS_PER_LOAD);
+  if (toFetch.length === 0) return;
+
+  toFetch.forEach((m) => oddsRequestedAt.set(String(m.eventId), now));
 
   const runBatch = async (batch) => {
     const results = await Promise.allSettled(
@@ -268,9 +284,9 @@ function fetchPrematchOddsInBackground(matchList) {
   };
 
   (async () => {
-    for (let i = 0; i < needOdds.length; i += CONCURRENT_ODDS) {
-      await runBatch(needOdds.slice(i, i + CONCURRENT_ODDS));
-      if (i + CONCURRENT_ODDS < needOdds.length) await new Promise((r) => setTimeout(r, 300));
+    for (let i = 0; i < toFetch.length; i += CONCURRENT_ODDS) {
+      await runBatch(toFetch.slice(i, i + CONCURRENT_ODDS));
+      if (i + CONCURRENT_ODDS < toFetch.length) await new Promise((r) => setTimeout(r, 400));
     }
   })();
 }
