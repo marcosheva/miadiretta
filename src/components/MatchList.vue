@@ -74,7 +74,7 @@ const stableMatches = ref({});
 // Match che hanno avuto un gol recente (per evidenziarli)
 const goalHighlights = ref({});
 
-// Audio semplice per il gol (beep breve)
+// Audio per il gol (beep). Si abilita al primo click sulla pagina (politica browser).
 let audioCtx = null;
 const playGoalSound = () => {
   try {
@@ -84,6 +84,7 @@ const playGoalSound = () => {
     if (!audioCtx) {
       audioCtx = new AudioContextClass();
     }
+    if (audioCtx.state === 'suspended') return;
 
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
@@ -358,7 +359,18 @@ const groupedMatches = computed(() => {
     });
 });
 
-onMounted(fetchMatches);
+onMounted(() => {
+  fetchMatches();
+  // Abilita AudioContext al primo click (richiesto dai browser)
+  const enableAudio = () => {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return;
+    if (!audioCtx) audioCtx = new AudioContextClass();
+    audioCtx.resume?.().catch(() => {});
+    document.removeEventListener('click', enableAudio);
+  };
+  document.addEventListener('click', enableAudio, { once: true });
+});
 watch(() => [props.filter, props.activeFilter, props.selectedDate], fetchMatches, { deep: true });
 
 // Refresh ogni 20s (allineato alla sync live del backend)

@@ -1,12 +1,12 @@
 import API_URL from '../config/api';
 
 /**
- * URL del logo squadra: preferisce i file locali in team_images/ (id squadra = nome file .png),
- * altrimenti usa l'URL CDN (team.logo).
- * In produzione usa l'URL completo del backend per team_images (frontend su altro dominio).
+ * URL del logo squadra: preferisce il CDN (team.logo) se presente per evitare 404,
+ * altrimenti prova i file locali team_images/ID.png (in produzione con URL backend).
  */
 export function teamLogoUrl(team) {
   if (!team) return '';
+  if (team.logo && typeof team.logo === 'string' && team.logo.startsWith('http')) return team.logo;
   if (team.id) {
     const path = `/team_images/${team.id}.png`;
     const base = (typeof API_URL === 'string' && API_URL.trim()) ? API_URL.replace(/\/$/, '') : '';
