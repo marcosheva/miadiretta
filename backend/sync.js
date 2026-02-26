@@ -63,9 +63,9 @@ async function syncMatches() {
       }
     }
 
-    // 3. Fetch Ended: ultimi 15 giorni sia in UTC sia in ora Italia (Europe/Rome)
-    console.log('Fetching ended matches (last 15 days, UTC + Rome, up to 100 pages/day)...');
-    const ENDED_DAYS_BACK = 15;
+    // 3. Fetch Ended: oggi e ieri (UTC + Europe/Rome)
+    console.log('Fetching ended matches (today + yesterday, UTC + Rome, up to 100 pages/day)...');
+    const ENDED_DAYS_BACK = 2; // 0 = oggi, 1 = ieri
     const ENDED_MAX_PAGES_PER_DAY = 100;
     const daysToRequest = new Set();
     const now = Date.now();

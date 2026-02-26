@@ -396,8 +396,8 @@ async function syncFromAPI() {
       console.error('Bet365 upcoming:', e.message);
     }
 
-    // Ended: ultimi 15 giorni — sia UTC sia ora Italia (Europe/Rome) per non perdere risultati
-    const ENDED_DAYS_BACK = 15;
+    // Ended: oggi e ieri — sia UTC sia ora Italia (Europe/Rome)
+    const ENDED_DAYS_BACK = 2; // 0 = oggi, 1 = ieri
     const ENDED_MAX_PAGES_PER_DAY = 100;
     const daysToRequest = new Set();
     const now = Date.now();
@@ -425,10 +425,10 @@ async function syncFromAPI() {
       if (dayTotal > 0) console.log(`Ended day=${day}: ${dayTotal} eventi`);
     }
 
-    // Ended per leghe prioritarie (Serie A ecc.) — stesso giorno in UTC
+    // Ended per leghe prioritarie (Serie A ecc.) — oggi e ieri
     const PRIORITY_LEAGUE_IDS = [199]; // 199 = Italy Serie A
     for (const leagueId of PRIORITY_LEAGUE_IDS) {
-      for (let daysAgo = 0; daysAgo < 7; daysAgo++) {
+      for (let daysAgo = 0; daysAgo < 2; daysAgo++) {
         const d = new Date();
         d.setUTCDate(d.getUTCDate() - daysAgo);
         const day = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, '0')}${String(d.getUTCDate()).padStart(2, '0')}`;
@@ -472,8 +472,8 @@ async function syncFromAPI() {
       }
     }
 
-    // Refresh risultati: TUTTE le partite FINISHED degli ultimi 15 giorni da BetsAPI
-    const fifteenDaysAgo = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
+    // Refresh risultati: partite FINISHED di oggi e ieri da BetsAPI
+    const fifteenDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
     const finishedRecent = await Match.find({
       status: 'FINISHED',
       startTime: { $gte: fifteenDaysAgo },
@@ -485,9 +485,9 @@ async function syncFromAPI() {
         await new Promise(r => setTimeout(r, 320));
       }
     }
-    if (finishedRecent.length > 0) console.log(`Refresh risultati: ${finishedRecent.length} partite (ultimi 15 gg)`);
+    if (finishedRecent.length > 0) console.log(`Refresh risultati: ${finishedRecent.length} partite (oggi+ieri)`);
 
-    // Recupero risultati mancanti: partite SCHEDULED con orario già passato (es. da upcoming, non restituite da events/ended)
+    // Recupero risultati mancanti: partite SCHEDULED con orario già passato (oggi/ieri, non restituite da events/ended)
     const pastThreshold = new Date(Date.now() - 2 * 60 * 60 * 1000);
     const scheduledPast = await Match.find({
       status: 'SCHEDULED',
