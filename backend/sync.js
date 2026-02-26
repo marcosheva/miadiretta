@@ -150,6 +150,53 @@ async function syncMatches() {
       );
     }
 
+    // Assegna bet365FixtureId (FI) alle partite senza, così le quote prematch funzionano
+    console.log('Building bet365 FI map for prematch odds...');
+    const fiByKey = new Map();
+    for (let page = 1; page <= 20; page++) {
+      try {
+        await wait(400);
+        const res = await axios.get(`https://api.b365api.com/v1/bet365/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
+        const list = res.data.results || [];
+        if (list.length === 0) break;
+        for (const ev of list) {
+          const id = ev.id != null ? String(ev.id) : (ev.FI != null ? String(ev.FI) : '');
+          if (!id) continue;
+          const home = (ev.home?.name || '').trim().toLowerCase();
+          const away = (ev.away?.name || '').trim().toLowerCase();
+          const league = (ev.league?.name || '').trim().toLowerCase();
+          const t = ev.time ? new Date(parseInt(ev.time, 10) * 1000) : null;
+          const day = t ? `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}` : '';
+          fiByKey.set(`${league}|${home}|${away}|${day}`, id);
+        }
+        if (list.length < 50) break;
+      } catch (e) {
+        console.error('Error fetching bet365/upcoming for FI map:', e.message);
+        break;
+      }
+    }
+    if (fiByKey.size > 0) {
+      const withoutFi = await Match.find({
+        status: 'SCHEDULED',
+        $or: [{ bet365FixtureId: { $exists: false } }, { bet365FixtureId: null }, { bet365FixtureId: '' }]
+      }).limit(3000);
+      let updated = 0;
+      for (const m of withoutFi) {
+        const home = (m.homeTeam?.name || '').trim().toLowerCase();
+        const away = (m.awayTeam?.name || '').trim().toLowerCase();
+        const league = (m.league || '').trim().toLowerCase();
+        const d = m.startTime ? new Date(m.startTime) : null;
+        const day = d ? `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}` : '';
+        const fi = fiByKey.get(`${league}|${home}|${away}|${day}`);
+        if (fi) {
+          m.bet365FixtureId = fi;
+          await m.save();
+          updated++;
+        }
+      }
+      if (updated > 0) console.log(`Bet365 FI: aggiornati ${updated} match per quote prematch`);
+    }
+
     console.log('Sync completed successfully');
     process.exit(0);
   } catch (err) {

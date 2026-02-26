@@ -506,10 +506,10 @@ async function syncFromAPI() {
     console.log(`Full sync: ${allEvents.length} events`);
     for (const ev of allEvents) await saveEventToDb(ev);
 
-    // Mappa bet365 FI (da bet365/upcoming) per prematch quote — FI = id in quella risposta
+    // Mappa bet365 FI (da bet365/upcoming) per prematch quote — stessa ampiezza di UPCOMING_PAGES
     try {
       const fiByKey = new Map();
-      for (let page = 1; page <= 8; page++) {
+      for (let page = 1; page <= UPCOMING_PAGES; page++) {
         await wait(400);
         const b365Res = await axios.get(`https://api.b365api.com/v1/bet365/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
         const list = b365Res.data.results || [];
@@ -1111,7 +1111,14 @@ app.get('/api/match/:id/odds', async (req, res) => {
     const eventId = req.params.id;
     if (!TOKEN || !eventId) return res.status(400).json({ message: 'Token e event_id richiesti' });
 
-    const matchForFi = await Match.findOne({ $or: [{ eventId }, { eventId: parseInt(eventId, 10) }] });
+    // Cerca per eventId o bet365FixtureId (così troviamo la partita sia con id generico sia con FI)
+    const idNum = /^\d+$/.test(String(eventId)) ? parseInt(eventId, 10) : null;
+    const matchForFi = await Match.findOne({
+      $or: [
+        { eventId },
+        ...(idNum != null ? [{ eventId: idNum }, { bet365FixtureId: String(eventId) }, { bet365FixtureId: idNum }] : [{ bet365FixtureId: eventId }])
+      ]
+    });
 
     // Risposta da cache MongoDB (veloce)
     let normalized = { main: null, overUnder25: null, btts: null };
@@ -1130,6 +1137,7 @@ app.get('/api/match/:id/odds', async (req, res) => {
       }
     }
 
+    // Per prematch BetsAPI richiede il FI bet365; preferiamo bet365FixtureId se presente
     const fi = (matchForFi?.bet365FixtureId && String(matchForFi.bet365FixtureId).trim()) || eventId;
 
     // Cache vuota: fetch da API e salva in DB
