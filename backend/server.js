@@ -93,6 +93,24 @@ function sameMatchKey(m) {
   };
 }
 
+// Errore duplicato chiave MongoDB (può essere su e.code o su writeErrors)
+function isDuplicateKeyError(e) {
+  if (!e) return false;
+  if (e.code === 11000) return true;
+  const we = e.writeErrors;
+  if (Array.isArray(we) && we[0] && we[0].code === 11000) return true;
+  return false;
+}
+
+// Query eventId che trova sia stringa sia numero
+function eventIdQuery(eid) {
+  if (/^\d+$/.test(String(eid))) {
+    const n = parseInt(eid, 10);
+    return { $or: [{ eventId: eid }, { eventId: n }] };
+  }
+  return { eventId: eid };
+}
+
 async function saveEventToDb(ev) {
   if (!ev.time) return;
   const matchData = buildMatchData(ev);
@@ -102,17 +120,48 @@ async function saveEventToDb(ev) {
   if (key) {
     const existing = await Match.findOne(key);
     if (existing) {
-      const merged = { ...matchData, eventId: existing.eventId };
+      const merged = {
+        ...existing.toObject(),
+        ...matchData
+      };
+      if (existing.bet365FixtureId && !merged.bet365FixtureId) {
+        merged.bet365FixtureId = existing.bet365FixtureId;
+      }
       if (existing.homeTeam?.logo && !merged.homeTeam?.logo) merged.homeTeam = { ...merged.homeTeam, logo: existing.homeTeam.logo };
       if (existing.awayTeam?.logo && !merged.awayTeam?.logo) merged.awayTeam = { ...merged.awayTeam, logo: existing.awayTeam.logo };
       if (existing.homeTeam?.id && !merged.homeTeam?.id) merged.homeTeam = { ...merged.homeTeam, id: existing.homeTeam.id };
       if (existing.awayTeam?.id && !merged.awayTeam?.id) merged.awayTeam = { ...merged.awayTeam, id: existing.awayTeam.id };
-      await Match.findByIdAndUpdate(existing._id, merged);
-      return;
+      try {
+        await Match.findByIdAndUpdate(existing._id, merged);
+        return;
+      } catch (e) {
+        if (isDuplicateKeyError(e)) {
+          // Un altro documento ha già questo eventId: aggiorna quello e rimuovi il duplicato
+          const other = await Match.findOne(eventIdQuery(eid));
+          if (other && other._id.toString() !== existing._id.toString()) {
+            const mergedOther = { ...other.toObject(), ...matchData };
+            if (existing.bet365FixtureId && !mergedOther.bet365FixtureId) mergedOther.bet365FixtureId = existing.bet365FixtureId;
+            await Match.findByIdAndUpdate(other._id, mergedOther);
+            await Match.deleteOne({ _id: existing._id });
+          } else {
+            await Match.updateOne(eventIdQuery(eid), { $set: matchData });
+          }
+          return;
+        }
+        throw e;
+      }
     }
   }
-  const query = /^\d+$/.test(eid) ? { $or: [{ eventId: eid }, { eventId: parseInt(eid, 10) }] } : { eventId: eid };
-  await Match.findOneAndUpdate(query, { ...matchData, eventId: eid }, { upsert: true });
+  const query = eventIdQuery(eid);
+  try {
+    await Match.findOneAndUpdate(query, { ...matchData, eventId: eid }, { upsert: true });
+  } catch (e) {
+    if (isDuplicateKeyError(e)) {
+      await Match.updateOne(eventIdQuery(eid), { $set: { ...matchData, eventId: eid } });
+    } else {
+      throw e;
+    }
+  }
 }
 
 // Partite da bet365/upcoming: FI = id da usare in prematch (preferiamo ev.FI se c'è).
@@ -159,12 +208,28 @@ async function saveBet365UpcomingToDb(ev) {
       if (existing.awayTeam?.logo && !merged.awayTeam?.logo) merged.awayTeam = { ...merged.awayTeam, logo: existing.awayTeam.logo };
       if (existing.homeTeam?.id && !merged.homeTeam?.id) merged.homeTeam = { ...merged.homeTeam, id: existing.homeTeam.id };
       if (existing.awayTeam?.id && !merged.awayTeam?.id) merged.awayTeam = { ...merged.awayTeam, id: existing.awayTeam.id };
-      await Match.findByIdAndUpdate(existing._id, merged);
-      return;
+      try {
+        await Match.findByIdAndUpdate(existing._id, merged);
+        return;
+      } catch (e) {
+        if (isDuplicateKeyError(e)) {
+          await Match.updateOne(eventIdQuery(eid), { $set: { ...matchData, eventId: eid } });
+          return;
+        }
+        throw e;
+      }
     }
   }
-  const query = /^\d+$/.test(eid) ? { $or: [{ eventId: eid }, { eventId: parseInt(eid, 10) }] } : { eventId: eid };
-  await Match.findOneAndUpdate(query, { ...matchData, eventId: eid }, { upsert: true });
+  const query = eventIdQuery(eid);
+  try {
+    await Match.findOneAndUpdate(query, { ...matchData, eventId: eid }, { upsert: true });
+  } catch (e) {
+    if (isDuplicateKeyError(e)) {
+      await Match.updateOne(eventIdQuery(eid), { $set: { ...matchData, eventId: eid } });
+    } else {
+      throw e;
+    }
+  }
 }
 
 // Mappa risposta bet365/result (id evento generico + bet365_id, ss, home, away...) in formato match per DB
@@ -215,8 +280,16 @@ async function saveResultToDb(matchData) {
     }
   }
   const eid = matchData.eventId;
-  const query = /^\d+$/.test(eid) ? { $or: [{ eventId: eid }, { eventId: parseInt(eid, 10) }] } : { eventId: eid };
-  await Match.findOneAndUpdate(query, { ...matchData, eventId: eid }, { upsert: true });
+  const query = eventIdQuery(eid);
+  try {
+    await Match.findOneAndUpdate(query, { ...matchData, eventId: eid }, { upsert: true });
+  } catch (e) {
+    if (isDuplicateKeyError(e)) {
+      await Match.updateOne(eventIdQuery(eid), { $set: { ...matchData, eventId: eid } });
+    } else {
+      throw e;
+    }
+  }
 }
 
 // Recupera risultato: prima event/view (id generico), poi bet365/result (bet365_id) per partite non restituite da events/ended
@@ -374,10 +447,16 @@ async function syncFromAPI() {
     const dbLiveMatches = await Match.find({ status: 'LIVE' });
     for (const dbMatch of dbLiveMatches) {
       if (dbMatch.eventId && !liveEventIds.has(dbMatch.eventId)) {
+        // Se una partita non compare più nel feed live:
+        // 1) proviamo a recuperare il risultato finale
+        // 2) se non è ancora disponibile, NON la forziamo subito a FINISHED
+        //    per evitare il comportamento "compare/scompare" quando BetsAPI
+        //    la toglie e la rimette dal feed live.
         const updated = await fetchAndSaveFinishedMatch(dbMatch.eventId);
         if (!updated) {
-          dbMatch.status = 'FINISHED';
-          await dbMatch.save();
+          // nessuna azione: resterà LIVE finché:
+          // - non arriva su events/ended, oppure
+          // - non viene considerata "stale" più sotto (staleLive)
         }
       }
     }
@@ -484,14 +563,36 @@ function dedupeMatches(matches) {
     const home = (m.homeTeam?.name || '').trim();
     const away = (m.awayTeam?.name || '').trim();
     const t = m.startTime ? new Date(m.startTime).getTime() : 0;
-    const key = `${league}|${home}|${away}|${t}`;
+    // Arrotondiamo all'intervallo di 2 minuti per considerare
+    // la stessa partita anche se gli startTime differiscono di qualche secondo.
+    const bucket = t ? Math.round(t / (2 * 60 * 1000)) : 0;
+    const key = `${league}|${home}|${away}|${bucket}`;
     const existing = byKey.get(key);
     if (!existing) {
       byKey.set(key, m);
     } else {
-      // Preferisci il doc con bet365FixtureId (per prematch) o con più dati
-      const hasFi = (x) => (x.bet365FixtureId && String(x.bet365FixtureId).trim()) || /^\d+$/.test(String(x.eventId || ''));
-      if (hasFi(m) && !hasFi(existing)) byKey.set(key, m);
+      // Regola di scelta:
+      // 1) Preferisci LIVE rispetto a FINISHED/SCHEDULED
+      // 2) Poi FINISHED rispetto a SCHEDULED
+      // 3) Se parità di stato, preferisci quello con più eventi salvati
+      // 4) In ultima istanza, tieni quello con bet365FixtureId (per prematch)
+      const order = (x) => (x.status === 'LIVE' ? 3 : x.status === 'FINISHED' ? 2 : 1);
+      const existingScore = order(existing);
+      const currentScore = order(m);
+      let replace = false;
+      if (currentScore > existingScore) {
+        replace = true;
+      } else if (currentScore === existingScore) {
+        const existingEvents = Array.isArray(existing.events) ? existing.events.length : 0;
+        const currentEvents = Array.isArray(m.events) ? m.events.length : 0;
+        if (currentEvents > existingEvents) {
+          replace = true;
+        } else if (currentEvents === existingEvents) {
+          const hasFi = (x) => (x.bet365FixtureId && String(x.bet365FixtureId).trim()) || /^\d+$/.test(String(x.eventId || ''));
+          if (hasFi(m) && !hasFi(existing)) replace = true;
+        }
+      }
+      if (replace) byKey.set(key, m);
     }
   }
   return [...byKey.values()];
