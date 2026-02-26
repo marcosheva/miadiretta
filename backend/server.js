@@ -263,11 +263,12 @@ async function syncLiveOnly() {
     const dbLiveMatches = await Match.find({ status: 'LIVE' });
     for (const dbMatch of dbLiveMatches) {
       if (dbMatch.eventId && !liveEventIds.has(dbMatch.eventId)) {
-        // Aggiorna subito il risultato finale da BetsAPI invece di lasciare l'ultimo punteggio live
+        // Se non compare più nel feed live, prova a recuperare il risultato.
+        // Se il risultato non è ancora disponibile, NON forzare subito FINISHED:
+        // lasciamo LIVE e ci pensa la full sync / controllo "stale" a chiudere la partita.
         const updated = await fetchAndSaveFinishedMatch(dbMatch.eventId);
         if (!updated) {
-          dbMatch.status = 'FINISHED';
-          await dbMatch.save();
+          // nessuna azione: evitiamo il flicker LIVE → FINISHED → LIVE
         }
       }
     }
