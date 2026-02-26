@@ -235,7 +235,7 @@ const fetchMatches = async () => {
     stableMatches.value = newStable;
 
     matches.value = data;
-    fetchPrematchOddsInBackground(data);
+    fetchPrematchOddsInBackground();
   } catch (err) {
     console.error('Error fetching matches:', err);
     matches.value = []; // Set to empty array on error
@@ -244,51 +244,10 @@ const fetchMatches = async () => {
   }
 };
 
-// Quote in background: limite richieste e cooldown per evitare migliaia di chiamate (CORB / rate limit)
-const CONCURRENT_ODDS = 4;
-const MAX_ODDS_REQUESTS_PER_LOAD = 24;
-const ODDS_COOLDOWN_MS = 3 * 60 * 1000; // non ri-richiedere le quote per la stessa partita per 3 minuti
-const oddsRequestedAt = new Map(); // eventId -> timestamp
-
-function fetchPrematchOddsInBackground(matchList) {
-  const needOdds = (matchList || matches.value).filter(
-    (m) => m?.status === 'SCHEDULED' && m?.eventId && (!m.odds || (m.odds?.home == null && m.odds?.draw == null && m.odds?.away == null))
-  );
-  if (needOdds.length === 0) return;
-
-  const now = Date.now();
-  const toFetch = needOdds
-    .filter((m) => {
-      const t = oddsRequestedAt.get(String(m.eventId));
-      return !t || now - t > ODDS_COOLDOWN_MS;
-    })
-    .slice(0, MAX_ODDS_REQUESTS_PER_LOAD);
-  if (toFetch.length === 0) return;
-
-  toFetch.forEach((m) => oddsRequestedAt.set(String(m.eventId), now));
-
-  const runBatch = async (batch) => {
-    const results = await Promise.allSettled(
-      batch.map((m) => axios.get(`${API_URL}/api/match/${m.eventId}/odds`))
-    );
-    results.forEach((out, i) => {
-      if (out.status !== 'fulfilled' || !out.value?.data?.main) return;
-      const m = batch[i];
-      const main = out.value.data.main;
-      const odds = { home: main['1'], draw: main['X'], away: main['2'] };
-      const idx = matches.value.findIndex((x) => String(x?.eventId) === String(m?.eventId));
-      if (idx >= 0) {
-        matches.value = matches.value.map((x, j) => (j === idx ? { ...x, odds } : x));
-      }
-    });
-  };
-
-  (async () => {
-    for (let i = 0; i < toFetch.length; i += CONCURRENT_ODDS) {
-      await runBatch(toFetch.slice(i, i + CONCURRENT_ODDS));
-      if (i + CONCURRENT_ODDS < toFetch.length) await new Promise((r) => setTimeout(r, 400));
-    }
-  })();
+// Quote in lista: non fare richieste in background (evita migliaia di request/CORB).
+// Le quote si vedono aprendo il dettaglio partita; in lista mostriamo solo quelle già in /api/matches.
+function fetchPrematchOddsInBackground() {
+  // Disabilitato: troppe richieste. Le quote si caricano nel dettaglio partita.
 }
 
 const groupedMatches = computed(() => {
@@ -389,8 +348,8 @@ onMounted(() => {
 });
 watch(() => [props.filter, props.activeFilter, props.selectedDate], fetchMatches, { deep: true });
 
-// Refresh ogni 20s (allineato alla sync live del backend)
-setInterval(fetchMatches, 20000);
+// Refresh lista ogni 90s (riduce richieste; i live si aggiornano comunque al prossimo refresh)
+setInterval(fetchMatches, 90 * 1000);
 </script>
 
 <style scoped>
