@@ -1,14 +1,24 @@
+const path = require('path');
 const axios = require('axios');
 const mongoose = require('mongoose');
 const Match = require('./models/Match');
-require('dotenv').config();
+
+// Carica .env da backend/ o dalla root del progetto
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+if (!process.env.BETSAPI_TOKEN && !process.env.MONGODB_URI) {
+  require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
+}
 
 const TOKEN = process.env.BETSAPI_TOKEN;
 const MONGODB_URI = process.env.MONGODB_URI;
 
 async function syncMatches() {
   if (!TOKEN) {
-    console.error('BETSAPI_TOKEN not found in .env');
+    console.error('BETSAPI_TOKEN non trovato. Imposta .env in backend/ o nella root con BETSAPI_TOKEN=...');
+    process.exit(1);
+  }
+  if (!MONGODB_URI) {
+    console.error('MONGODB_URI non trovato. Imposta .env con MONGODB_URI=...');
     process.exit(1);
   }
 
@@ -53,9 +63,9 @@ async function syncMatches() {
       }
     }
 
-    // 3. Fetch Ended: ultimi 10 giorni sia in UTC sia in ora Italia (Europe/Rome)
-    console.log('Fetching ended matches (last 10 days, UTC + Rome, up to 100 pages/day)...');
-    const ENDED_DAYS_BACK = 10;
+    // 3. Fetch Ended: ultimi 15 giorni sia in UTC sia in ora Italia (Europe/Rome)
+    console.log('Fetching ended matches (last 15 days, UTC + Rome, up to 100 pages/day)...');
+    const ENDED_DAYS_BACK = 15;
     const ENDED_MAX_PAGES_PER_DAY = 100;
     const daysToRequest = new Set();
     const now = Date.now();
@@ -107,24 +117,28 @@ async function syncMatches() {
         awayScore = parseInt(scores[1]) || 0;
       }
 
-      // Metadata mapping
+      const eventId = ev.id != null ? String(ev.id) : '';
+      if (!eventId) continue;
+
       const matchData = {
-        eventId: ev.id,
+        eventId,
         sport: 'Football',
         league: ev.league?.name || 'Unknown League',
-        leagueId: ev.league?.id,
+        leagueId: ev.league?.id != null ? String(ev.league.id) : undefined,
         country: ev.cc?.toUpperCase() || (ev.league?.name?.split(' ')[0]?.toUpperCase() || 'UN'),
-        startTime: new Date(parseInt(ev.time) * 1000),
+        startTime: new Date(parseInt(ev.time, 10) * 1000),
         status: ev.timer ? 'LIVE' : (ev.ss && ev.ss.includes('-') && !ev.timer ? 'FINISHED' : 'SCHEDULED'),
         minute: ev.timer?.tm ? `${ev.timer.tm}'` : '',
         homeTeam: {
           name: ev.home?.name || 'Home',
-          logo: ev.home?.image_id ? `https://assets.b365api.com/images/team/m/${ev.home.image_id}.png` : '',
+          id: (ev.home?.image_id ?? ev.home?.id) != null ? String(ev.home.image_id ?? ev.home.id) : undefined,
+          logo: (ev.home?.image_id || ev.home?.id) ? `https://assets.b365api.com/images/team/m/${ev.home?.image_id || ev.home?.id}.png` : '',
           score: homeScore
         },
         awayTeam: {
           name: ev.away?.name || 'Away',
-          logo: ev.away?.image_id ? `https://assets.b365api.com/images/team/m/${ev.away.image_id}.png` : '',
+          id: (ev.away?.image_id ?? ev.away?.id) != null ? String(ev.away.image_id ?? ev.away.id) : undefined,
+          logo: (ev.away?.image_id || ev.away?.id) ? `https://assets.b365api.com/images/team/m/${ev.away?.image_id || ev.away?.id}.png` : '',
           score: awayScore
         }
       };

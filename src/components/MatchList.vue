@@ -210,7 +210,11 @@ const fetchMatches = async () => {
     if (props.activeFilter.type === 'country') params.country = props.activeFilter.value;
     
     if (props.selectedDate) {
-      params.date = props.selectedDate.toISOString().split('T')[0];
+      const d = new Date(props.selectedDate);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      params.date = `${y}-${m}-${day}`;
     }
     
     const response = await axios.get(`${API_URL}/api/matches`, { params });

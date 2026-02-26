@@ -12,7 +12,8 @@
     "server:pm2:stop": "pm2 stop diretta-backend",
     "server:pm2:logs": "pm2 logs diretta-backend",
     "build": "cd backend && npm install && cd .. && vite build",
-    "serve": "vite preview"
+    "serve": "vite preview",
+    "sync": "node backend/sync.js"
   },
   "dependencies": {
     "axios": "^1.13.5",

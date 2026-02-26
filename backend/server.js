@@ -167,7 +167,59 @@ async function saveBet365UpcomingToDb(ev) {
   await Match.findOneAndUpdate(query, { ...matchData, eventId: eid }, { upsert: true });
 }
 
-// Recupera da BetsAPI il risultato finale di una partita (event/view) e aggiorna il DB
+// Mappa risposta bet365/result (id evento generico + bet365_id, ss, home, away...) in formato match per DB
+function buildMatchDataFromBet365Result(ev) {
+  if (!ev || !ev.time) return null;
+  const scores = parseScore(ev.ss || '0-0');
+  const eventId = ev.id != null ? String(ev.id) : (ev.bet365_id != null ? String(ev.bet365_id) : '');
+  if (!eventId) return null;
+  return {
+    eventId,
+    bet365FixtureId: ev.bet365_id != null ? String(ev.bet365_id) : undefined,
+    sport: 'Football',
+    league: ev.league?.name || 'Unknown League',
+    leagueId: ev.league?.id != null ? String(ev.league.id) : undefined,
+    country: (ev.league?.cc || '').toUpperCase() || 'UN',
+    startTime: new Date(parseInt(ev.time, 10) * 1000),
+    status: 'FINISHED',
+    minute: '',
+    homeTeam: {
+      name: ev.home?.name || 'Home',
+      id: (ev.home?.image_id ?? ev.home?.id) != null ? String(ev.home.image_id ?? ev.home.id) : undefined,
+      logo: (ev.home?.image_id || ev.home?.id) ? `https://assets.b365api.com/images/team/m/${ev.home?.image_id || ev.home?.id}.png` : '',
+      score: scores.homeScore
+    },
+    awayTeam: {
+      name: ev.away?.name || 'Away',
+      id: (ev.away?.image_id ?? ev.away?.id) != null ? String(ev.away.image_id ?? ev.away.id) : undefined,
+      logo: (ev.away?.image_id || ev.away?.id) ? `https://assets.b365api.com/images/team/m/${ev.away?.image_id || ev.away?.id}.png` : '',
+      score: scores.awayScore
+    }
+  };
+}
+
+async function saveResultToDb(matchData) {
+  if (!matchData?.eventId) return;
+  const key = sameMatchKey(matchData);
+  if (key) {
+    const existing = await Match.findOne(key);
+    if (existing) {
+      const merged = { ...matchData, eventId: existing.eventId };
+      if (existing.homeTeam?.logo && !merged.homeTeam?.logo) merged.homeTeam = { ...merged.homeTeam, logo: existing.homeTeam.logo };
+      if (existing.awayTeam?.logo && !merged.awayTeam?.logo) merged.awayTeam = { ...merged.awayTeam, logo: existing.awayTeam.logo };
+      if (existing.homeTeam?.id && !merged.homeTeam?.id) merged.homeTeam = { ...merged.homeTeam, id: existing.homeTeam.id };
+      if (existing.awayTeam?.id && !merged.awayTeam?.id) merged.awayTeam = { ...merged.awayTeam, id: existing.awayTeam.id };
+      if (existing.bet365FixtureId && !merged.bet365FixtureId) merged.bet365FixtureId = existing.bet365FixtureId;
+      await Match.findByIdAndUpdate(existing._id, merged);
+      return;
+    }
+  }
+  const eid = matchData.eventId;
+  const query = /^\d+$/.test(eid) ? { $or: [{ eventId: eid }, { eventId: parseInt(eid, 10) }] } : { eventId: eid };
+  await Match.findOneAndUpdate(query, { ...matchData, eventId: eid }, { upsert: true });
+}
+
+// Recupera risultato: prima event/view (id generico), poi bet365/result (bet365_id) per partite non restituite da events/ended
 async function fetchAndSaveFinishedMatch(eventId) {
   const TOKEN = process.env.BETSAPI_TOKEN;
   if (!TOKEN) return false;
@@ -179,7 +231,20 @@ async function fetchAndSaveFinishedMatch(eventId) {
       return true;
     }
   } catch (e) {
-    // ignore: endpoint può fallire per eventi appena chiusi
+    // ignore
+  }
+  try {
+    const resultRes = await axios.get(`https://api.b365api.com/v1/bet365/result?token=${TOKEN}&event_id=${eventId}`);
+    const ev = resultRes.data.results?.[0];
+    if (ev && (ev.ss || ev.time_status === '3')) {
+      const matchData = buildMatchDataFromBet365Result(ev);
+      if (matchData) {
+        await saveResultToDb(matchData);
+        return true;
+      }
+    }
+  } catch (e) {
+    // ignore
   }
   return false;
 }
@@ -342,6 +407,22 @@ async function syncFromAPI() {
     }
     if (finishedRecent.length > 0) console.log(`Refresh risultati: ${finishedRecent.length} partite (ultimi 15 gg)`);
 
+    // Recupero risultati mancanti: partite SCHEDULED con orario già passato (es. da upcoming, non restituite da events/ended)
+    const pastThreshold = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const scheduledPast = await Match.find({
+      status: 'SCHEDULED',
+      startTime: { $lt: pastThreshold, $gte: fifteenDaysAgo },
+      eventId: { $exists: true, $ne: null, $ne: '' }
+    }).sort({ startTime: -1 }).limit(80);
+    for (const m of scheduledPast) {
+      if (m.eventId) {
+        const updated = await fetchAndSaveFinishedMatch(m.eventId);
+        if (updated) console.log(`Recuperato risultato (bet365/result): ${m.homeTeam?.name} - ${m.awayTeam?.name}`);
+        await new Promise(r => setTimeout(r, 350));
+      }
+    }
+    if (scheduledPast.length > 0) console.log(`Risultati mancanti: ${scheduledPast.length} partite controllate`);
+
     console.log(`Full sync: ${allEvents.length} events`);
     for (const ev of allEvents) await saveEventToDb(ev);
 
@@ -424,10 +505,9 @@ app.get('/api/matches', async (req, res) => {
     if (country) query.country = country.toUpperCase();
     
     if (date) {
-      const startOfDay = new Date(date);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(date);
-      endOfDay.setHours(23, 59, 59, 999);
+      const [y, m, d] = String(date).split('-').map(Number);
+      const startOfDay = new Date(Date.UTC(y, (m || 1) - 1, d || 1, 0, 0, 0, 0));
+      const endOfDay = new Date(Date.UTC(y, (m || 1) - 1, d || 1, 23, 59, 59, 999));
       query.startTime = { $gte: startOfDay, $lte: endOfDay };
     }
     
