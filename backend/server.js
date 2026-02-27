@@ -20,25 +20,28 @@ let io = null;
 const allowedOrigins = [
   'https://diretta24.onrender.com',
   'https://miadiretta-2.onrender.com',
-  'http://localhost:5173',
   'http://localhost:3000',
-  'http://127.0.0.1:5173',
   'http://127.0.0.1:3000'
 ];
 if (process.env.ALLOWED_ORIGINS) {
   allowedOrigins.push(...process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean));
 }
 
-// Vercel: consenti sia dominio principale che preview (es: https://myapp.vercel.app, https://myapp-git-branch-user.vercel.app)
+// Vercel: consenti produzione e preview (qualsiasi sottodominio .vercel.app)
 function isVercelOrigin(origin) {
-  return /^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin);
+  return /^https:\/\/[^\/]+\.vercel\.app$/i.test(origin);
+}
+
+// Dev locale: consenti qualsiasi porta su localhost / 127.0.0.1 (es. 5173, 5174, 4173, ecc.)
+function isLocalDevOrigin(origin) {
+  return /^http:\/\/(localhost|127\.0\.0\.1):\d+$/i.test(origin);
 }
 
 app.use(cors({
   origin: (origin, cb) => {
     // senza Origin (curl/server-to-server) → ok
     if (!origin) return cb(null, true);
-    if (allowedOrigins.includes(origin) || isVercelOrigin(origin)) return cb(null, true);
+    if (allowedOrigins.includes(origin) || isVercelOrigin(origin) || isLocalDevOrigin(origin)) return cb(null, true);
     // Non inviare header CORS: il browser bloccherà la richiesta cross-origin non autorizzata
     return cb(null, false);
   },
