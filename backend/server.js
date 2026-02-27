@@ -486,33 +486,9 @@ async function syncLiveOnly() {
 
 // Sync completa: inplay + upcoming + ended (per nuove partite e risultati finiti)
 const FULL_SYNC_INTERVAL_MS = 2 * 60 * 1000; // 2 minuti (risultati ended più allineati a BetsAPI)
-// Upcoming: per non fermarci a "domani", usiamo day=YYYYMMDD su events/upcoming e bet365/upcoming.
-// Facciamo una sync "near" frequente (oggi+domani) e una sync "deep" meno frequente (es. prossimi 30 giorni).
-const UPCOMING_NEAR_DAYS = Number.parseInt(process.env.UPCOMING_NEAR_DAYS || '2', 10); // oggi + domani
-const UPCOMING_DEEP_DAYS = Number.parseInt(process.env.UPCOMING_DEEP_DAYS || '30', 10); // quanti giorni futuri caricare
-const UPCOMING_MAX_PAGES_PER_DAY = Number.parseInt(process.env.UPCOMING_MAX_PAGES_PER_DAY || '30', 10);
-const DEEP_UPCOMING_INTERVAL_MS = Number.parseInt(process.env.DEEP_UPCOMING_INTERVAL_MS || String(6 * 60 * 60 * 1000), 10); // 6h
-let lastDeepUpcomingSyncAt = 0;
-
-function toYYYYMMDDUTC(date) {
-  const d = new Date(date);
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return `${y}${m}${day}`;
-}
-
-function upcomingDaysList(daysCount) {
-  const n = Math.max(1, Math.min(365, Number.isFinite(daysCount) ? daysCount : 2));
-  const days = [];
-  const base = new Date();
-  base.setUTCHours(0, 0, 0, 0);
-  for (let i = 0; i < n; i++) {
-    const d = new Date(base.getTime() + i * 24 * 60 * 60 * 1000);
-    days.push(toYYYYMMDDUTC(d));
-  }
-  return days;
-}
+// Upcoming: usiamo paginazione profonda per eventi/upcoming e bet365/upcoming.
+const UPCOMING_GENERIC_MAX_PAGES = Number.parseInt(process.env.UPCOMING_GENERIC_MAX_PAGES || '80', 10);
+const UPCOMING_BET365_MAX_PAGES = Number.parseInt(process.env.UPCOMING_BET365_MAX_PAGES || '80', 10);
 
 async function syncFromAPI() {
   const TOKEN = process.env.BETSAPI_TOKEN;
@@ -534,65 +510,45 @@ async function syncFromAPI() {
 
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-    const nowMs = Date.now();
-    const shouldDeepUpcoming = (nowMs - lastDeepUpcomingSyncAt) > DEEP_UPCOMING_INTERVAL_MS;
-    const upcomingDays = upcomingDaysList(shouldDeepUpcoming ? UPCOMING_DEEP_DAYS : UPCOMING_NEAR_DAYS);
-
-    if (shouldDeepUpcoming) {
-      console.log(`Upcoming deep sync: ${upcomingDays.length} giorni (day=YYYYMMDD)`);
-    }
-
-    // Prima: events/upcoming (API generica) per avere image_id e loghi squadre nelle programmate
-    // Proviamo /v3/ (doc ufficiale); se fallisce, fallback a /v1/.
+    // Upcoming generiche (events/upcoming) senza filtro day=, scorrendo molte pagine
     try {
       let saved = 0;
-      for (const day of upcomingDays) {
-        for (let page = 1; page <= UPCOMING_MAX_PAGES_PER_DAY; page++) {
-          await wait(320);
-          let res;
-          try {
-            res = await axios.get(`https://api.b365api.com/v3/events/upcoming?sport_id=1&token=${TOKEN}&day=${day}&page=${page}`);
-          } catch (e) {
-            res = await axios.get(`https://api.b365api.com/v1/events/upcoming?sport_id=1&token=${TOKEN}&day=${day}&page=${page}`);
+      for (let page = 1; page <= UPCOMING_GENERIC_MAX_PAGES; page++) {
+        await wait(350);
+        const res = await axios.get(`https://api.b365api.com/v1/events/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
+        const results = res.data.results || [];
+        if (results.length === 0) break;
+        for (const ev of results) {
+          if (ev.time) {
+            await saveEventToDb(ev);
+            saved++;
           }
-          const results = res.data.results || [];
-          if (results.length === 0) break;
-          for (const ev of results) {
-            if (ev.time) {
-              await saveEventToDb(ev);
-              saved++;
-            }
-          }
-          if (results.length < 50) break;
         }
+        if (results.length < 50) break;
       }
       if (saved > 0) console.log(`Upcoming (events/upcoming): ${saved} eventi salvati/aggiornati`);
     } catch (e) {
-      console.error('Events upcoming (day=):', e.message);
+      console.error('Events upcoming (pagine):', e.message);
     }
 
-    // Poi: bet365/upcoming — FI per quote prematch; il merge preserva i loghi già salvati
+    // bet365/upcoming — FI per prematch, sempre con paginazione profonda
     try {
       let upcomingCount = 0;
-      for (const day of upcomingDays) {
-        for (let page = 1; page <= UPCOMING_MAX_PAGES_PER_DAY; page++) {
-          await wait(360);
-          const res = await axios.get(`https://api.b365api.com/v1/bet365/upcoming?sport_id=1&token=${TOKEN}&day=${day}&page=${page}`);
-          const results = res.data.results || [];
-          if (results.length === 0) break;
-          for (const ev of results) {
-            await saveBet365UpcomingToDb(ev);
-            upcomingCount++;
-          }
-          if (results.length < 50) break;
+      for (let page = 1; page <= UPCOMING_BET365_MAX_PAGES; page++) {
+        await wait(400);
+        const res = await axios.get(`https://api.b365api.com/v1/bet365/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
+        const results = res.data.results || [];
+        if (results.length === 0) break;
+        for (const ev of results) {
+          await saveBet365UpcomingToDb(ev);
+          upcomingCount++;
         }
+        if (results.length < 50) break;
       }
       if (upcomingCount > 0) console.log(`Upcoming (bet365 FI): ${upcomingCount} partite`);
     } catch (e) {
-      console.error('Bet365 upcoming (day=):', e.message);
+      console.error('Bet365 upcoming (pagine):', e.message);
     }
-
-    if (shouldDeepUpcoming) lastDeepUpcomingSyncAt = Date.now();
 
     // Partite in programma: aggiorna loghi in automatico (più batch per sync così si coprono tutte)
     const SCHEDULED_LOGOS_BATCH = 100;
@@ -736,55 +692,49 @@ async function syncFromAPI() {
     // Dopo la full sync aggiorna i client WebSocket con uno snapshot completo
     await emitMatchesSnapshot();
 
-    // Mappa bet365 FI per match che ancora ne sono privi.
-    // La facciamo solo in deep sync: è costosa e non serve ogni 2 minuti.
-    if (shouldDeepUpcoming) {
-      try {
-        const fiByKey = new Map();
-        const fiDays = upcomingDaysList(UPCOMING_DEEP_DAYS);
-        for (const day of fiDays) {
-          for (let page = 1; page <= UPCOMING_MAX_PAGES_PER_DAY; page++) {
-            await wait(360);
-            const b365Res = await axios.get(`https://api.b365api.com/v1/bet365/upcoming?sport_id=1&token=${TOKEN}&day=${day}&page=${page}`);
-            const list = b365Res.data.results || [];
-            if (list.length === 0) break;
-            for (const ev of list) {
-              const id = ev.id != null ? String(ev.id) : (ev.FI != null ? String(ev.FI) : '');
-              if (!id) continue;
-              const home = (ev.home?.name || '').trim().toLowerCase();
-              const away = (ev.away?.name || '').trim().toLowerCase();
-              const league = (ev.league?.name || '').trim().toLowerCase();
-              const t = ev.time ? new Date(parseInt(ev.time, 10) * 1000) : null;
-              const dayISO = t ? `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}` : '';
-              fiByKey.set(`${league}|${home}|${away}|${dayISO}`, id);
-            }
-            if (list.length < 50) break;
-          }
+    // Mappa bet365 FI per match che ancora ne sono privi (pagina-based, come nella sync completa).
+    try {
+      const fiByKey = new Map();
+      for (let page = 1; page <= 20; page++) {
+        await wait(400);
+        const b365Res = await axios.get(`https://api.b365api.com/v1/bet365/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
+        const list = b365Res.data.results || [];
+        if (list.length === 0) break;
+        for (const ev of list) {
+          const id = ev.id != null ? String(ev.id) : (ev.FI != null ? String(ev.FI) : '');
+          if (!id) continue;
+          const home = (ev.home?.name || '').trim().toLowerCase();
+          const away = (ev.away?.name || '').trim().toLowerCase();
+          const league = (ev.league?.name || '').trim().toLowerCase();
+          const t = ev.time ? new Date(parseInt(ev.time, 10) * 1000) : null;
+          const dayISO = t ? `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}` : '';
+          fiByKey.set(`${league}|${home}|${away}|${dayISO}`, id);
         }
-        if (fiByKey.size > 0) {
-          const matchesWithoutFi = await Match.find({
-            status: 'SCHEDULED',
-            $or: [{ bet365FixtureId: { $exists: false } }, { bet365FixtureId: null }, { bet365FixtureId: '' }]
-          }).limit(3000);
-          let updated = 0;
-          for (const match of matchesWithoutFi) {
-            const home = (match.homeTeam?.name || '').trim().toLowerCase();
-            const away = (match.awayTeam?.name || '').trim().toLowerCase();
-            const league = (match.league || '').trim().toLowerCase();
-            const d = match.startTime ? new Date(match.startTime) : null;
-            const dayISO = d ? `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}` : '';
-            const fi = fiByKey.get(`${league}|${home}|${away}|${dayISO}`);
-            if (fi) {
-              match.bet365FixtureId = fi;
-              await match.save();
-              updated++;
-            }
-          }
-          if (updated > 0) console.log(`Bet365 FI: aggiornati ${updated} match per quote prematch`);
-        }
-      } catch (e) {
-        console.error('Bet365 upcoming (FI map day=):', e.message);
+        if (list.length < 50) break;
       }
+      if (fiByKey.size > 0) {
+        const matchesWithoutFi = await Match.find({
+          status: 'SCHEDULED',
+          $or: [{ bet365FixtureId: { $exists: false } }, { bet365FixtureId: null }, { bet365FixtureId: '' }]
+        }).limit(3000);
+        let updated = 0;
+        for (const match of matchesWithoutFi) {
+          const home = (match.homeTeam?.name || '').trim().toLowerCase();
+          const away = (match.awayTeam?.name || '').trim().toLowerCase();
+          const league = (match.league || '').trim().toLowerCase();
+          const d = match.startTime ? new Date(match.startTime) : null;
+          const dayISO = d ? `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}` : '';
+          const fi = fiByKey.get(`${league}|${home}|${away}|${dayISO}`);
+          if (fi) {
+            match.bet365FixtureId = fi;
+            await match.save();
+            updated++;
+          }
+        }
+        if (updated > 0) console.log(`Bet365 FI: aggiornati ${updated} match per quote prematch`);
+      }
+    } catch (e) {
+      console.error('Bet365 upcoming (FI map pagine):', e.message);
     }
   } catch (err) {
     console.error('Full sync error:', err.message);

@@ -350,6 +350,22 @@ const groupedMatches = computed(() => {
 });
 
 let socket = null;
+const POLL_INTERVAL_MS = 20000; // 20s quando WebSocket non è connesso
+let pollTimerId = null;
+
+function startPolling() {
+  if (pollTimerId) return;
+  pollTimerId = setInterval(() => {
+    fetchMatches();
+  }, POLL_INTERVAL_MS);
+}
+
+function stopPolling() {
+  if (pollTimerId) {
+    clearInterval(pollTimerId);
+    pollTimerId = null;
+  }
+}
 
 onMounted(() => {
   fetchMatches();
@@ -357,12 +373,21 @@ onMounted(() => {
   if (wsUrl) {
     try {
       socket = io(wsUrl, { transports: ['websocket', 'polling'] });
+      socket.on('connect', () => stopPolling());
+      socket.on('disconnect', () => startPolling());
       socket.on('matches:update', (payload) => {
         applyIncomingMatches(Array.isArray(payload) ? payload : []);
       });
+      // Se dopo 4s il socket non è connesso, usa polling per aggiornamenti (gol, beep, evidenziazione)
+      setTimeout(() => {
+        if (!socket?.connected) startPolling();
+      }, 4000);
     } catch (e) {
       console.warn('WebSocket non disponibile, uso solo HTTP:', e.message);
+      startPolling();
     }
+  } else {
+    startPolling();
   }
   const enableAudio = () => {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
@@ -375,6 +400,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  stopPolling();
   if (socket) {
     socket.removeAllListeners();
     socket.disconnect();
@@ -382,7 +408,6 @@ onUnmounted(() => {
 });
 
 watch(() => [props.filter, props.activeFilter, props.selectedDate], () => {
-  // Filtri applicati in computed; refresh HTTP solo per allineare dati se il backend ha filtri aggiuntivi
   if (!socket?.connected) fetchMatches();
 }, { deep: true });
 </script>
