@@ -27,6 +27,11 @@ if (process.env.ALLOWED_ORIGINS) {
   allowedOrigins.push(...process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean));
 }
 
+// Render: consenti qualsiasi frontend su *.onrender.com (es. diretta24.onrender.com → miadiretta-2)
+function isRenderOrigin(origin) {
+  return /^https:\/\/[^\/]+\.onrender\.com$/i.test(origin);
+}
+
 // Vercel: consenti produzione e preview (qualsiasi sottodominio .vercel.app)
 function isVercelOrigin(origin) {
   return /^https:\/\/[^\/]+\.vercel\.app$/i.test(origin);
@@ -37,17 +42,20 @@ function isLocalDevOrigin(origin) {
   return /^http:\/\/(localhost|127\.0\.0\.1):\d+$/i.test(origin);
 }
 
+function isOriginAllowed(origin) {
+  if (!origin) return true;
+  return allowedOrigins.includes(origin) || isRenderOrigin(origin) || isVercelOrigin(origin) || isLocalDevOrigin(origin);
+}
+
 app.use(cors({
   origin: (origin, cb) => {
-    // senza Origin (curl/server-to-server) → ok
-    if (!origin) return cb(null, true);
-    if (allowedOrigins.includes(origin) || isVercelOrigin(origin) || isLocalDevOrigin(origin)) return cb(null, true);
-    // Non inviare header CORS: il browser bloccherà la richiesta cross-origin non autorizzata
+    if (isOriginAllowed(origin)) return cb(null, true);
     return cb(null, false);
   },
   credentials: false,
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  optionsSuccessStatus: 204
 }));
 app.use(express.json());
 // Loghi squadre locali (cartella team_images con file ID.png)
