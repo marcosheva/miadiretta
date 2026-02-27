@@ -16,7 +16,27 @@ const MONGODB_URI = process.env.MONGODB_URI;
 // Socket.io istanza (inizializzata solo quando il file è eseguito come main)
 let io = null;
 
-app.use(cors({ origin: true, credentials: false }));
+// CORS: consenti frontend su dominio diverso (es. diretta24.onrender.com → miadiretta-2.onrender.com)
+const allowedOrigins = [
+  'https://diretta24.onrender.com',
+  'https://miadiretta-2.onrender.com',
+  'http://localhost:5173',
+  'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3000'
+];
+if (process.env.ALLOWED_ORIGINS) {
+  allowedOrigins.push(...process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean));
+}
+app.use(cors({
+  origin: (origin, cb) => {
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(null, true);
+  },
+  credentials: false,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 // Loghi squadre locali (cartella team_images con file ID.png)
 app.use('/team_images', express.static(path.join(__dirname, '..', 'team_images')));
@@ -231,10 +251,13 @@ async function saveBet365UpcomingToDb(ev) {
     const existing = await Match.findOne(key);
     if (existing) {
       const merged = { ...matchData, eventId: eid };
-      if (existing.homeTeam?.logo && !merged.homeTeam?.logo) merged.homeTeam = { ...merged.homeTeam, logo: existing.homeTeam.logo };
-      if (existing.awayTeam?.logo && !merged.awayTeam?.logo) merged.awayTeam = { ...merged.awayTeam, logo: existing.awayTeam.logo };
-      if (existing.homeTeam?.id && !merged.homeTeam?.id) merged.homeTeam = { ...merged.homeTeam, id: existing.homeTeam.id };
-      if (existing.awayTeam?.id && !merged.awayTeam?.id) merged.awayTeam = { ...merged.awayTeam, id: existing.awayTeam.id };
+      // Non sovrascrivere mai loghi/id già presenti: bet365/upcoming ha id sbagliati per il CDN
+      if (existing.homeTeam?.logo && String(existing.homeTeam.logo).trim()) {
+        merged.homeTeam = { ...merged.homeTeam, logo: existing.homeTeam.logo, id: existing.homeTeam?.id ?? merged.homeTeam?.id };
+      }
+      if (existing.awayTeam?.logo && String(existing.awayTeam.logo).trim()) {
+        merged.awayTeam = { ...merged.awayTeam, logo: existing.awayTeam.logo, id: existing.awayTeam?.id ?? merged.awayTeam?.id };
+      }
       try {
         await Match.findByIdAndUpdate(existing._id, merged);
         return;
