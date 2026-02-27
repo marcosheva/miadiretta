@@ -498,6 +498,7 @@ async function syncFromAPI() {
   }
 
   try {
+    console.log('Full sync started');
     const allEvents = [];
     const liveEventIds = new Set();
 
@@ -511,41 +512,54 @@ async function syncFromAPI() {
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
     // Upcoming generiche (events/upcoming) senza filtro day=, scorrendo molte pagine
+    console.log('Upcoming: scaricamento events/upcoming...');
     try {
       let saved = 0;
       for (let page = 1; page <= UPCOMING_GENERIC_MAX_PAGES; page++) {
         await wait(350);
-        const res = await axios.get(`https://api.b365api.com/v1/events/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
-        const results = res.data.results || [];
-        if (results.length === 0) break;
-        for (const ev of results) {
-          if (ev.time) {
-            await saveEventToDb(ev);
-            saved++;
+        try {
+          const res = await axios.get(`https://api.b365api.com/v1/events/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
+          const results = res.data.results || [];
+          if (results.length === 0) break;
+          for (const ev of results) {
+            if (ev.time) {
+              await saveEventToDb(ev);
+              saved++;
+            }
           }
+          if (results.length < 50) break;
+        } catch (pageErr) {
+          console.error(`Events upcoming page ${page}:`, pageErr.message);
+          if (page === 1) break;
+          // continua con le altre pagine
         }
-        if (results.length < 50) break;
       }
-      if (saved > 0) console.log(`Upcoming (events/upcoming): ${saved} eventi salvati/aggiornati`);
+      console.log(`Upcoming (events/upcoming): ${saved} eventi salvati/aggiornati`);
     } catch (e) {
       console.error('Events upcoming (pagine):', e.message);
     }
 
     // bet365/upcoming — FI per prematch, sempre con paginazione profonda
+    console.log('Upcoming: scaricamento bet365/upcoming...');
     try {
       let upcomingCount = 0;
       for (let page = 1; page <= UPCOMING_BET365_MAX_PAGES; page++) {
         await wait(400);
-        const res = await axios.get(`https://api.b365api.com/v1/bet365/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
-        const results = res.data.results || [];
-        if (results.length === 0) break;
-        for (const ev of results) {
-          await saveBet365UpcomingToDb(ev);
-          upcomingCount++;
+        try {
+          const res = await axios.get(`https://api.b365api.com/v1/bet365/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
+          const results = res.data.results || [];
+          if (results.length === 0) break;
+          for (const ev of results) {
+            await saveBet365UpcomingToDb(ev);
+            upcomingCount++;
+          }
+          if (results.length < 50) break;
+        } catch (pageErr) {
+          console.error(`Bet365 upcoming page ${page}:`, pageErr.message);
+          if (page === 1) break;
         }
-        if (results.length < 50) break;
       }
-      if (upcomingCount > 0) console.log(`Upcoming (bet365 FI): ${upcomingCount} partite`);
+      console.log(`Upcoming (bet365 FI): ${upcomingCount} partite`);
     } catch (e) {
       console.error('Bet365 upcoming (pagine):', e.message);
     }

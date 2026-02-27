@@ -42,8 +42,10 @@ import { Star } from 'lucide-vue-next';
 import MatchRow from './MatchRow.vue';
 import API_URL from '../config/api';
 
-// URL del backend per Socket.io (stesso host/porta dell'API)
+// URL del backend per Socket.io (stesso host/porta dell'API).
+// In produzione usiamo solo il polling HTTP: niente WebSocket.
 function getSocketUrl() {
+  if (import.meta.env.PROD) return '';
   if (typeof window === 'undefined') return '';
   const api = import.meta.env.VITE_API_URL || '';
   if (api) return api.replace(/\/$/, '');
