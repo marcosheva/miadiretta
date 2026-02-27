@@ -35,11 +35,20 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch, inject } from 'vue';
+import { ref, onMounted, computed, watch, inject, onUnmounted } from 'vue';
 import axios from 'axios';
+import { io } from 'socket.io-client';
 import { Star } from 'lucide-vue-next';
 import MatchRow from './MatchRow.vue';
 import API_URL from '../config/api';
+
+// URL del backend per Socket.io (stesso host/porta dell'API)
+function getSocketUrl() {
+  if (typeof window === 'undefined') return '';
+  const api = import.meta.env.VITE_API_URL || '';
+  if (api) return api.replace(/\/$/, '');
+  return `${window.location.protocol}//${window.location.host}`;
+}
 
 const showGoalNotification = inject('showGoalNotification', null);
 
@@ -203,42 +212,34 @@ const applyStabilization = (data) => {
   });
 };
 
+// Applica dati ricevuti (da HTTP o WebSocket): rileva gol, stabilizza, aggiorna stato
+function applyIncomingMatches(raw) {
+  const list = Array.isArray(raw) ? raw : [];
+  detectGoals(list);
+  const data = applyStabilization(list);
+  const newStable = {};
+  data.forEach((m) => {
+    if (m && m._id) newStable[m._id] = m;
+  });
+  stableMatches.value = newStable;
+  matches.value = data;
+}
+
 const fetchMatches = async () => {
   loading.value = true;
   try {
     const params = {};
     if (props.activeFilter.type === 'league') params.league = props.activeFilter.value;
     if (props.activeFilter.type === 'country') params.country = props.activeFilter.value;
-    
     if (props.selectedDate) {
       const d = new Date(props.selectedDate);
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
-      params.date = `${y}-${m}-${day}`;
+      params.date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     }
-    
     const response = await axios.get(`${API_URL}/api/matches`, { params });
-    const raw = Array.isArray(response.data) ? response.data : [];
-
-    // IMPORTANTE: rileva i gol PRIMA della stabilizzazione, usando i dati raw
-    detectGoals(raw);
-
-    // Poi applica smoothing per evitare "salti indietro" nella visualizzazione
-    const data = applyStabilization(raw);
-
-    // aggiorna lo stato stabile
-    const newStable = {};
-    data.forEach((m) => {
-      if (m && m._id) newStable[m._id] = m;
-    });
-    stableMatches.value = newStable;
-
-    matches.value = data;
-    fetchPrematchOddsInBackground();
+    applyIncomingMatches(response.data || []);
   } catch (err) {
     console.error('Error fetching matches:', err);
-    matches.value = []; // Set to empty array on error
+    matches.value = [];
   } finally {
     loading.value = false;
   }
@@ -255,8 +256,22 @@ const groupedMatches = computed(() => {
   if (props.filter === 'LIVE') filtered = filtered.filter(m => m.status === 'LIVE');
   if (props.filter === 'CONCLUSI') filtered = filtered.filter(m => m.status === 'FINISHED');
   if (props.filter === 'PROGRAMMATE') filtered = filtered.filter(m => m.status === 'SCHEDULED');
-
-  // Filtro per nome squadra
+  if (props.activeFilter.type === 'league' && props.activeFilter.value) {
+    filtered = filtered.filter(m => m.league === props.activeFilter.value);
+  }
+  if (props.activeFilter.type === 'country' && props.activeFilter.value) {
+    filtered = filtered.filter(m => (m.country || '').toUpperCase() === String(props.activeFilter.value).toUpperCase());
+  }
+  if (props.selectedDate) {
+    const d = new Date(props.selectedDate);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    filtered = filtered.filter(m => {
+      const t = m.startTime ? new Date(m.startTime) : null;
+      if (!t) return false;
+      const mk = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+      return mk === key;
+    });
+  }
   const q = (props.teamSearch || '').trim().toLowerCase();
   if (q) {
     filtered = filtered.filter(m =>
@@ -334,9 +349,21 @@ const groupedMatches = computed(() => {
     });
 });
 
+let socket = null;
+
 onMounted(() => {
   fetchMatches();
-  // Abilita AudioContext al primo click (richiesto dai browser)
+  const wsUrl = getSocketUrl();
+  if (wsUrl) {
+    try {
+      socket = io(wsUrl, { transports: ['websocket', 'polling'] });
+      socket.on('matches:update', (payload) => {
+        applyIncomingMatches(Array.isArray(payload) ? payload : []);
+      });
+    } catch (e) {
+      console.warn('WebSocket non disponibile, uso solo HTTP:', e.message);
+    }
+  }
   const enableAudio = () => {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) return;
@@ -346,10 +373,18 @@ onMounted(() => {
   };
   document.addEventListener('click', enableAudio, { once: true });
 });
-watch(() => [props.filter, props.activeFilter, props.selectedDate], fetchMatches, { deep: true });
 
-// Refresh lista ogni 90s (riduce richieste; i live si aggiornano comunque al prossimo refresh)
-setInterval(fetchMatches, 90 * 1000);
+onUnmounted(() => {
+  if (socket) {
+    socket.removeAllListeners();
+    socket.disconnect();
+  }
+});
+
+watch(() => [props.filter, props.activeFilter, props.selectedDate], () => {
+  // Filtri applicati in computed; refresh HTTP solo per allineare dati se il backend ha filtri aggiuntivi
+  if (!socket?.connected) fetchMatches();
+}, { deep: true });
 </script>
 
 <style scoped>

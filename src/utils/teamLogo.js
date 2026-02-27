@@ -1,23 +1,19 @@
-import API_URL from '../config/api';
+const BETSAPI_CDN = 'https://assets.b365api.com/images/team/m';
 
-/**
- * URL del logo squadra: preferisce il CDN (team.logo) se presente per evitare 404,
- * altrimenti prova i file locali team_images/ID.png (in produzione con URL backend).
- */
+// 1x1 trasparente: usato su errore caricamento logo per nascondere icona rotta e evitare nuovi request
+export const LOGO_PLACEHOLDER = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
 export function teamLogoUrl(team) {
   if (!team) return '';
   if (team.logo && typeof team.logo === 'string' && team.logo.startsWith('http')) return team.logo;
-  if (team.id) {
-    const path = `/team_images/${team.id}.png`;
-    const base = (typeof API_URL === 'string' && API_URL.trim()) ? API_URL.replace(/\/$/, '') : '';
-    return base ? `${base}${path}` : path;
-  }
-  return team.logo || '';
+  if (team.id) return `${BETSAPI_CDN}/${team.id}.png`;
+  return '';
 }
 
-/**
- * True se c'è almeno un logo da mostrare (locale o CDN).
- */
+// Mostra il logo se abbiamo team.logo (URL) o team.id (si prova il CDN; su 404 si nasconde con onLogoError).
 export function hasTeamLogo(team) {
-  return !!(team && (team.id || team.logo));
+  if (!team) return false;
+  if (team.logo && typeof team.logo === 'string' && team.logo.startsWith('http')) return true;
+  if (team.id) return true;
+  return false;
 }

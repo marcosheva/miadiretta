@@ -21,7 +21,7 @@
           :src="teamLogoUrl(match.homeTeam)"
           class="team-logo"
           :alt="match.homeTeam.name"
-          @error="($e) => $e.target.src = (match.homeTeam?.logo || '')"
+          @error="onLogoError"
         />
         <span class="team-name" :class="{ winner: isWinner(match.homeTeam.score, match.awayTeam.score) }">
           {{ match.homeTeam.name }}
@@ -46,7 +46,7 @@
           :src="teamLogoUrl(match.awayTeam)"
           class="team-logo"
           :alt="match.awayTeam.name"
-          @error="($e) => $e.target.src = (match.awayTeam?.logo || '')"
+          @error="onLogoError"
         />
       </div>
     </div>
@@ -81,7 +81,12 @@
 </template>
 
 <script setup>
-import { teamLogoUrl, hasTeamLogo } from '../utils/teamLogo';
+import { teamLogoUrl, hasTeamLogo, LOGO_PLACEHOLDER } from '../utils/teamLogo';
+
+function onLogoError(e) {
+  e.target.src = LOGO_PLACEHOLDER;
+  e.target.classList.add('logo-hidden');
+}
 
 const props = defineProps({
   match: Object,
@@ -256,6 +261,15 @@ const isWinner = (s1, s2) => s1 > s2;
   height: 22px;
   object-fit: contain;
   flex-shrink: 0;
+}
+
+.team-logo.logo-hidden {
+  width: 0;
+  height: 0;
+  margin: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .team.home .team-logo { margin-right: 6px; }

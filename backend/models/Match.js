@@ -31,7 +31,8 @@ const MatchSchema = new mongoose.Schema({
   },
   oddsOverUnder25: { over: Number, under: Number },
   oddsBtts: { yes: Number, no: Number },
-  events: [mongoose.Schema.Types.Mixed]
+  events: [mongoose.Schema.Types.Mixed],
+  logosFromBet365Result: { type: Boolean, default: false } // true = loghi già corretti da bet365/result
 }, { timestamps: true });
 
 module.exports = mongoose.model('Match', MatchSchema);

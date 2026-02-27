@@ -1,8 +1,10 @@
 const express = require('express');
 const path = require('path');
+const http = require('http');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const axios = require('axios');
+const { Server: SocketIOServer } = require('socket.io');
 require('dotenv').config();
 
 const Match = require('./models/Match');
@@ -10,6 +12,9 @@ const Match = require('./models/Match');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
+
+// Socket.io istanza (inizializzata solo quando il file è eseguito come main)
+let io = null;
 
 app.use(cors({ origin: true, credentials: false }));
 app.use(express.json());
@@ -27,6 +32,18 @@ mongoose.connect(MONGODB_URI)
     });
   })
   .catch(err => console.error('MongoDB connection error:', err));
+
+// Invia ai client WebSocket uno snapshot completo delle partite (live, programmate, concluse)
+async function emitMatchesSnapshot() {
+  if (!io) return;
+  try {
+    const raw = await Match.find({}).sort({ startTime: 1 });
+    const matches = dedupeMatches(raw);
+    io.emit('matches:update', matches);
+  } catch (e) {
+    console.error('Errore emitMatchesSnapshot:', e.message);
+  }
+}
 
 // Estrae punteggio da BetsAPI (ss può essere "1-2" o oggetto { "1": "0-1", "2": "1-2" } = HT/FT)
 function parseScore(ss) {
@@ -164,13 +181,23 @@ async function saveEventToDb(ev) {
   }
 }
 
+// Estrae id immagine squadra (BetsAPI può restituire image_id, id, o codice IG)
+function teamImageId(team) {
+  if (!team) return null;
+  const id = team.image_id ?? team.IG ?? team.id;
+  return id != null && String(id).trim() !== '' ? String(id) : null;
+}
+
 // Partite da bet365/upcoming: FI = id da usare in prematch (preferiamo ev.FI se c'è).
+// I loghi spesso mancano qui; vengono riempiti dal merge con events/upcoming (image_id).
 function buildMatchDataFromBet365(ev) {
   const id = (ev.FI != null && String(ev.FI).trim()) ? String(ev.FI) : (ev.id != null ? String(ev.id) : '');
   if (!id) return null;
   const t = ev.time != null ? parseInt(ev.time, 10) : (ev.start_time != null ? parseInt(ev.start_time, 10) : null);
   if (!t || isNaN(t)) return null;
   const time = t;
+  const homeImgId = teamImageId(ev.home);
+  const awayImgId = teamImageId(ev.away);
   return {
     eventId: id,
     sport: 'Football',
@@ -182,14 +209,14 @@ function buildMatchDataFromBet365(ev) {
     minute: '',
     homeTeam: {
       name: ev.home?.name || 'Home',
-      id: (ev.home?.image_id ?? ev.home?.id) != null ? String(ev.home.image_id ?? ev.home.id) : undefined,
-      logo: (ev.home?.image_id || ev.home?.id) ? `https://assets.b365api.com/images/team/m/${ev.home?.image_id || ev.home?.id}.png` : '',
+      id: (ev.home?.image_id ?? ev.home?.IG ?? ev.home?.id) != null ? String(ev.home.image_id ?? ev.home.IG ?? ev.home.id) : undefined,
+      logo: homeImgId ? `https://assets.b365api.com/images/team/m/${homeImgId}.png` : '',
       score: 0
     },
     awayTeam: {
       name: ev.away?.name || 'Away',
-      id: (ev.away?.image_id ?? ev.away?.id) != null ? String(ev.away.image_id ?? ev.away.id) : undefined,
-      logo: (ev.away?.image_id || ev.away?.id) ? `https://assets.b365api.com/images/team/m/${ev.away?.image_id || ev.away?.id}.png` : '',
+      id: (ev.away?.image_id ?? ev.away?.IG ?? ev.away?.id) != null ? String(ev.away.image_id ?? ev.away.IG ?? ev.away.id) : undefined,
+      logo: awayImgId ? `https://assets.b365api.com/images/team/m/${awayImgId}.png` : '',
       score: 0
     }
   };
@@ -292,6 +319,64 @@ async function saveResultToDb(matchData) {
   }
 }
 
+// Recupera loghi (image_id) per partite in programma: prima bet365/result, se fallisce event/view
+async function fetchAndSaveScheduledLogos(match) {
+  const TOKEN = process.env.BETSAPI_TOKEN;
+  if (!TOKEN || !match) return false;
+
+  const betIdRaw = match.bet365FixtureId || match.eventId;
+  if (!betIdRaw) return false;
+  const id = String(betIdRaw).trim();
+  if (!id) return false;
+
+  const CDN = 'https://assets.b365api.com/images/team/m';
+
+  function buildUpdate(ev) {
+    if (!ev?.home || !ev?.away) return null;
+    // Preferisci image_id (corretto per il CDN); id a volte è diverso e dà 404
+    const homeImgId = ev.home.image_id || ev.home.id;
+    const awayImgId = ev.away.image_id || ev.away.id;
+    if (!homeImgId && !awayImgId) return null;
+    const update = {};
+    if (homeImgId) {
+      update['homeTeam.id'] = String(homeImgId);
+      update['homeTeam.logo'] = `${CDN}/${homeImgId}.png`;
+    }
+    if (awayImgId) {
+      update['awayTeam.id'] = String(awayImgId);
+      update['awayTeam.logo'] = `${CDN}/${awayImgId}.png`;
+    }
+    return Object.keys(update).length ? update : null;
+  }
+
+  // 1) Prova bet365/result (FI) — restituisce image_id per programmate
+  try {
+    const res = await axios.get(`https://api.b365api.com/v1/bet365/result?token=${TOKEN}&event_id=${id}`);
+    const ev = res.data?.results?.[0];
+    const update = buildUpdate(ev);
+    if (update) {
+      update.logosFromBet365Result = true;
+      await Match.updateOne({ _id: match._id }, { $set: update });
+      return true;
+    }
+  } catch (e) { /* fallback sotto */ }
+
+  // 2) Fallback: event/view (accetta sia FI sia event id generico)
+  try {
+    const viewRes = await axios.get(`https://api.b365api.com/v1/event/view?event_id=${id}&token=${TOKEN}`);
+    const ev = viewRes.data?.results?.[0];
+    const update = buildUpdate(ev);
+    if (update) {
+      update.logosFromBet365Result = true;
+      await Match.updateOne({ _id: match._id }, { $set: update });
+      return true;
+    }
+  } catch (e) {
+    return false;
+  }
+  return false;
+}
+
 // Recupera risultato: prima event/view (id generico), poi bet365/result (bet365_id) per partite non restituite da events/ended
 async function fetchAndSaveFinishedMatch(eventId) {
   const TOKEN = process.env.BETSAPI_TOKEN;
@@ -348,6 +433,9 @@ async function syncLiveOnly() {
 
     for (const ev of liveItems) await saveEventToDb(ev);
     if (liveItems.length > 0) console.log(`Live sync: ${liveItems.length} partite aggiornate`);
+
+    // Dopo aver aggiornato il DB, invia snapshot via WebSocket (se attivo)
+    await emitMatchesSnapshot();
   } catch (e) {
     console.error('Live sync error:', e.message);
   }
@@ -377,7 +465,24 @@ async function syncFromAPI() {
 
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-    // Partite in programma da bet365/upcoming — id = FI (stesso da usare in prematch per le quote)
+    // Prima: events/upcoming (API generica) per avere image_id e loghi squadre nelle programmate
+    const UPCOMING_GENERIC_PAGES = 18;
+    try {
+      for (let page = 1; page <= UPCOMING_GENERIC_PAGES; page++) {
+        await wait(350);
+        const res = await axios.get(`https://api.b365api.com/v1/events/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
+        const results = res.data.results || [];
+        if (results.length === 0) break;
+        for (const ev of results) {
+          if (ev.time) await saveEventToDb(ev);
+        }
+        if (results.length < 50) break;
+      }
+    } catch (e) {
+      console.error('Events upcoming (loghi):', e.message);
+    }
+
+    // Poi: bet365/upcoming — FI per quote prematch; il merge preserva i loghi già salvati
     try {
       let upcomingCount = 0;
       for (let page = 1; page <= UPCOMING_PAGES; page++) {
@@ -394,6 +499,35 @@ async function syncFromAPI() {
       if (upcomingCount > 0) console.log(`Upcoming (bet365 FI): ${upcomingCount} partite`);
     } catch (e) {
       console.error('Bet365 upcoming:', e.message);
+    }
+
+    // Partite in programma: aggiorna loghi in automatico (più batch per sync così si coprono tutte)
+    const SCHEDULED_LOGOS_BATCH = 100;
+    const SCHEDULED_LOGOS_MAX_BATCHES = 4;
+    try {
+      let totalLogosFilled = 0;
+      for (let batchNum = 0; batchNum < SCHEDULED_LOGOS_MAX_BATCHES; batchNum++) {
+        const withFi = await Match.find({
+          status: 'SCHEDULED',
+          $or: [
+            { bet365FixtureId: { $exists: true, $nin: [null, ''] } },
+            { eventId: { $exists: true, $nin: [null, ''] } }
+          ],
+          logosFromBet365Result: { $ne: true }
+        }).sort({ startTime: 1 }).limit(SCHEDULED_LOGOS_BATCH).lean();
+        if (withFi.length === 0) break;
+        let batchFilled = 0;
+        for (const m of withFi) {
+          const ok = await fetchAndSaveScheduledLogos(m);
+          if (ok) batchFilled++;
+          await wait(180);
+        }
+        totalLogosFilled += batchFilled;
+        if (withFi.length < SCHEDULED_LOGOS_BATCH) break;
+      }
+      if (totalLogosFilled > 0) console.log(`Loghi programmate: aggiornati ${totalLogosFilled} (bet365/result + event/view)`);
+    } catch (e) {
+      console.error('Scheduled logos:', e.message);
     }
 
     // Ended: oggi e ieri — sia UTC sia ora Italia (Europe/Rome)
@@ -505,6 +639,9 @@ async function syncFromAPI() {
 
     console.log(`Full sync: ${allEvents.length} events`);
     for (const ev of allEvents) await saveEventToDb(ev);
+
+    // Dopo la full sync aggiorna i client WebSocket con uno snapshot completo
+    await emitMatchesSnapshot();
 
     // Mappa bet365 FI (da bet365/upcoming) per prematch quote — stessa ampiezza di UPCOMING_PAGES
     try {
@@ -742,6 +879,19 @@ app.get('/api/matches/live', async (req, res) => {
   try {
     const raw = await Match.find({ status: 'LIVE' }).sort({ startTime: 1 });
     res.json(dedupeMatches(raw));
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Aggiorna i loghi di una partita (Mongo _id): chiama bet365/result + event/view e sovrascrive id/logo
+app.post('/api/match/refresh-logos/:mongoId', async (req, res) => {
+  try {
+    const match = await Match.findById(req.params.mongoId).lean();
+    if (!match) return res.status(404).json({ message: 'Match not found' });
+    if (match.status !== 'SCHEDULED') return res.status(400).json({ message: 'Solo partite in programma' });
+    const ok = await fetchAndSaveScheduledLogos(match);
+    res.json({ ok, message: ok ? 'Loghi aggiornati' : 'Nessun image_id trovato da API' });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -1205,18 +1355,58 @@ app.get('/api/sync', async (req, res) => {
   try {
     console.log('Manual/Cron sync triggered');
     await syncFromAPI();
-    res.json({ message: 'Sync started' });
+    res.json({ message: 'Sync completed' });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
 });
 
-if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
-  }).on('error', (err) => {
-    console.error('Server failed to start:', err);
+// Resetta lo stato "loghi già presi" per le programmate: alla prossima sync verranno riempite di nuovo
+app.post('/api/scheduled/reset-logos', async (req, res) => {
+  try {
+    const r = await Match.updateMany(
+      { status: 'SCHEDULED' },
+      { $unset: { logosFromBet365Result: 1 } }
+    );
+    res.json({ message: 'Reset ok', modifiedCount: r.modifiedCount });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+// Produzione (Render ecc.): serve il frontend Vue dalla cartella dist
+const distPath = path.join(__dirname, '..', 'dist');
+if (require('fs').existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/team_images')) return next();
+    res.sendFile(path.join(distPath, 'index.html'));
   });
+}
+
+if (require.main === module) {
+  const server = http.createServer(app);
+
+  io = new SocketIOServer(server, {
+    cors: {
+      origin: '*',
+      methods: ['GET', 'POST']
+    }
+  });
+
+  io.on('connection', (socket) => {
+    console.log('WebSocket client connected:', socket.id);
+    // Invia subito lo snapshot corrente delle partite al nuovo client
+    emitMatchesSnapshot().catch(() => {});
+  });
+
+  server
+    .listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    })
+    .on('error', (err) => {
+      console.error('Server failed to start:', err);
+    });
 }
 
 module.exports = app;
