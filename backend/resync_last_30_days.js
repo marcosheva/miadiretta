@@ -135,7 +135,6 @@ async function resyncLast30Days() {
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   await mongoose.connect(MONGODB_URI);
-  console.log('Connesso a MongoDB, inizio resync ultimi 30 giorni...');
 
   let totalSaved = 0;
 
@@ -161,14 +160,10 @@ async function resyncLast30Days() {
         }
         if (ended.length < 50) break;
       } catch (e) {
-        console.error('Errore events/ended day=', day, 'page=', page, e.message);
         break;
       }
     }
-    if (dayTotal > 0) {
-      totalSaved += dayTotal;
-      console.log(`Ended day=${day}: salvate ${dayTotal} partite`);
-    }
+    if (dayTotal > 0) totalSaved += dayTotal;
   }
 
   // 2) Live attuali
@@ -179,10 +174,7 @@ async function resyncLast30Days() {
       await saveEventToDb(ev);
       totalSaved++;
     }
-    console.log(`Live attuali: ${liveItems.length} partite salvate/aggiornate`);
-  } catch (e) {
-    console.error('Errore events/inplay:', e.message);
-  }
+  } catch (e) { /* ignore */ }
 
   // 3) Upcoming generici (events/upcoming) - partite programmate con image_id
   const UPCOMING_GENERIC_PAGES = 18;
@@ -200,10 +192,7 @@ async function resyncLast30Days() {
       }
       if (results.length < 50) break;
     }
-    console.log('Upcoming (events/upcoming) salvate');
-  } catch (e) {
-    console.error('Errore events/upcoming:', e.message);
-  }
+  } catch (e) { /* ignore */ }
 
   // 4) Upcoming da bet365 (FI per quote + loghi bet365 dove disponibili)
   const UPCOMING_BET365_PAGES = 20;
@@ -220,12 +209,8 @@ async function resyncLast30Days() {
       }
       if (results.length < 50) break;
     }
-    console.log(`Upcoming (bet365 FI): ${upcomingCount} partite salvate/aggiornate`);
-  } catch (e) {
-    console.error('Errore bet365/upcoming:', e.message);
-  }
+  } catch (e) { /* ignore */ }
 
-  console.log(`Resync completato. Totale partite salvate/aggiornate (approssimativo): ${totalSaved}`);
   await mongoose.disconnect();
   process.exit(0);
 }

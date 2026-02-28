@@ -28,7 +28,12 @@
       </template>
     </div>
 
-    <div v-if="!loading && groupedMatches.length === 0" class="no-results">
+    <div v-if="serverUnavailable && !loading" class="server-unavailable">
+      <p>Il server è in avvio o temporaneamente non disponibile.</p>
+      <p>Su Render (piano free) il backend si riattiva in 1–2 minuti. Riprova tra poco.</p>
+      <button type="button" class="retry-btn" @click="fetchMatches()">Riprova</button>
+    </div>
+    <div v-else-if="!loading && groupedMatches.length === 0" class="no-results">
       Nessun risultato disponibile per questa categoria.
     </div>
   </div>
@@ -37,20 +42,9 @@
 <script setup>
 import { ref, onMounted, computed, watch, inject, onUnmounted } from 'vue';
 import axios from 'axios';
-import { io } from 'socket.io-client';
 import { Star } from 'lucide-vue-next';
 import MatchRow from './MatchRow.vue';
 import API_URL from '../config/api';
-
-// URL del backend per Socket.io (stesso host/porta dell'API).
-// In produzione usiamo solo il polling HTTP: niente WebSocket.
-function getSocketUrl() {
-  if (import.meta.env.PROD) return '';
-  if (typeof window === 'undefined') return '';
-  const api = import.meta.env.VITE_API_URL || '';
-  if (api) return api.replace(/\/$/, '');
-  return `${window.location.protocol}//${window.location.host}`;
-}
 
 const showGoalNotification = inject('showGoalNotification', null);
 
@@ -76,6 +70,7 @@ defineEmits(['select-match', 'show-table', 'add-to-slip']);
 
 const matches = ref([]);
 const loading = ref(true);
+const serverUnavailable = ref(false); // 502/503 o cold start Render
 const favorites = ref(JSON.parse(localStorage.getItem('favoriteLeagues') || '[]'));
 
 // Storico dei punteggi per rilevare nuovi gol
@@ -227,8 +222,9 @@ function applyIncomingMatches(raw) {
   matches.value = data;
 }
 
-const fetchMatches = async () => {
+const fetchMatches = async (retryCount = 0) => {
   loading.value = true;
+  serverUnavailable.value = false;
   try {
     const params = {};
     if (props.activeFilter.type === 'league') params.league = props.activeFilter.value;
@@ -242,6 +238,17 @@ const fetchMatches = async () => {
   } catch (err) {
     console.error('Error fetching matches:', err);
     matches.value = [];
+    const status = err.response?.status;
+    const isNetworkOrCors = err.message === 'Network Error' || err.code === 'ERR_NETWORK';
+    const is502503 = status === 502 || status === 503;
+    if (is502503 || isNetworkOrCors) {
+      serverUnavailable.value = true;
+      // Ritenta dopo 4 s (max 2 ritenti) — utile quando Render è in cold start
+      if (retryCount < 2) {
+        setTimeout(() => fetchMatches(retryCount + 1), 4000);
+        return;
+      }
+    }
   } finally {
     loading.value = false;
   }
@@ -371,26 +378,7 @@ function stopPolling() {
 
 onMounted(() => {
   fetchMatches();
-  const wsUrl = getSocketUrl();
-  if (wsUrl) {
-    try {
-      socket = io(wsUrl, { transports: ['websocket', 'polling'] });
-      socket.on('connect', () => stopPolling());
-      socket.on('disconnect', () => startPolling());
-      socket.on('matches:update', (payload) => {
-        applyIncomingMatches(Array.isArray(payload) ? payload : []);
-      });
-      // Se dopo 4s il socket non è connesso, usa polling per aggiornamenti (gol, beep, evidenziazione)
-      setTimeout(() => {
-        if (!socket?.connected) startPolling();
-      }, 4000);
-    } catch (e) {
-      console.warn('WebSocket non disponibile, uso solo HTTP:', e.message);
-      startPolling();
-    }
-  } else {
-    startPolling();
-  }
+  startPolling();
   const enableAudio = () => {
     const AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass) return;
@@ -403,14 +391,10 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopPolling();
-  if (socket) {
-    socket.removeAllListeners();
-    socket.disconnect();
-  }
 });
 
 watch(() => [props.filter, props.activeFilter, props.selectedDate], () => {
-  if (!socket?.connected) fetchMatches();
+  fetchMatches();
 }, { deep: true });
 </script>
 
@@ -493,5 +477,27 @@ watch(() => [props.filter, props.activeFilter, props.selectedDate], () => {
   text-align: center;
   padding: 40px;
   color: var(--text-muted);
+}
+
+.server-unavailable {
+  text-align: center;
+  padding: 32px 24px;
+  color: var(--text-muted);
+}
+.server-unavailable p {
+  margin: 0 0 8px;
+}
+.server-unavailable .retry-btn {
+  margin-top: 16px;
+  padding: 10px 20px;
+  background: var(--accent, #2563eb);
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.server-unavailable .retry-btn:hover {
+  opacity: 0.9;
 }
 </style>

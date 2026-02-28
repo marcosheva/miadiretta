@@ -49,10 +49,8 @@ function pickBetter(a, b) {
 
 async function run() {
   await mongoose.connect(MONGODB_URI);
-  console.log('Connected to MongoDB for cleanup');
 
   const all = await Match.find({}).lean();
-  console.log(`Trovati ${all.length} documenti Match`);
 
   const bestByKey = new Map();
   const idsByKey = new Map();
@@ -78,11 +76,8 @@ async function run() {
     }
   }
 
-  console.log(`Partite duplicate da eliminare: ${toDelete.length}`);
-
   if (toDelete.length > 0) {
-    const res = await Match.deleteMany({ _id: { $in: toDelete } });
-    console.log(`Eliminati ${res.deletedCount} documenti duplicati`);
+    await Match.deleteMany({ _id: { $in: toDelete } });
   }
 
   // Backfill loghi mancanti dai dati BetsAPI (id -> URL CDN)
@@ -92,8 +87,6 @@ async function run() {
       { 'awayTeam.id': { $ne: null }, 'awayTeam.logo': { $in: [null, ''] } }
     ]
   });
-
-  console.log(`Partite con loghi mancanti da sistemare: ${missingLogos.length}`);
 
   let updatedLogos = 0;
   for (const m of missingLogos) {
@@ -113,10 +106,7 @@ async function run() {
     }
   }
 
-  console.log(`Loghi aggiornati per ${updatedLogos} partite`);
-
   await mongoose.disconnect();
-  console.log('Cleanup completato');
   process.exit(0);
 }
 

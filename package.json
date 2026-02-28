@@ -2,7 +2,7 @@
   "name": "diretta",
   "version": "1.0.0",
   "description": "",
-  "main": "inspect_db.js",
+  "main": "index.html",
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run server\" \"npm run client\"",
@@ -19,7 +19,6 @@
     "axios": "^1.13.5",
     "lucide-vue-next": "^0.563.0",
     "mongodb": "^7.1.0",
-    "socket.io-client": "^4.8.1",
     "vue": "^3.3.4"
   },
   "devDependencies": {

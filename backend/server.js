@@ -4,7 +4,6 @@ const http = require('http');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const axios = require('axios');
-const { Server: SocketIOServer } = require('socket.io');
 require('dotenv').config();
 
 const Match = require('./models/Match');
@@ -13,12 +12,10 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
 
-// Socket.io istanza (inizializzata solo quando il file è eseguito come main)
-let io = null;
-
-// CORS: consenti frontend su dominio diverso (es. diretta24.onrender.com → miadiretta-2.onrender.com)
+// CORS: consenti frontend su dominio diverso (es. diretta24 / mydiretta24 → miadiretta-2.onrender.com)
 const allowedOrigins = [
   'https://diretta24.onrender.com',
+  'https://mydiretta24.vercel.app',
   'https://miadiretta-2.onrender.com',
   'http://localhost:3000',
   'http://127.0.0.1:3000'
@@ -80,7 +77,6 @@ app.use('/team_images', express.static(path.join(__dirname, '..', 'team_images')
 // Connect to MongoDB
 mongoose.connect(MONGODB_URI)
   .then(() => {
-    console.log('Connected to MongoDB');
     setInterval(syncLiveOnly, LIVE_SYNC_INTERVAL_MS);
     syncLiveOnly(); // subito i live, senza aspettare la full sync
     syncFromAPI().then(() => {
@@ -89,16 +85,9 @@ mongoose.connect(MONGODB_URI)
   })
   .catch(err => console.error('MongoDB connection error:', err));
 
-// Invia ai client WebSocket uno snapshot completo delle partite (live, programmate, concluse)
-async function emitMatchesSnapshot() {
-  if (!io) return;
-  try {
-    const raw = await Match.find({}).sort({ startTime: 1 });
-    const matches = dedupeMatches(raw);
-    io.emit('matches:update', matches);
-  } catch (e) {
-    console.error('Errore emitMatchesSnapshot:', e.message);
-  }
+// Aggiornamenti partite: solo polling HTTP (Socket.io rimosso)
+function emitMatchesSnapshot() {
+  return Promise.resolve();
 }
 
 // Estrae punteggio da BetsAPI (ss può essere "1-2" o oggetto { "1": "0-1", "2": "1-2" } = HT/FT)
@@ -505,7 +494,6 @@ async function syncLiveOnly() {
     }
 
     for (const ev of liveItems) await saveEventToDb(ev);
-    if (liveItems.length > 0) console.log(`Live sync: ${liveItems.length} partite aggiornate`);
 
     // Dopo aver aggiornato il DB, invia snapshot via WebSocket (se attivo)
     await emitMatchesSnapshot();
@@ -524,13 +512,9 @@ const ODDS_PREFILL_MAX = Math.min(200, Math.max(0, Number.parseInt(process.env.O
 
 async function syncFromAPI() {
   const TOKEN = process.env.BETSAPI_TOKEN;
-  if (!TOKEN) {
-    console.log('Skipping API sync: No BetsAPI Token provided');
-    return;
-  }
+  if (!TOKEN) return;
 
   try {
-    console.log('Full sync started');
     const allEvents = [];
     const liveEventIds = new Set();
 
@@ -539,12 +523,11 @@ async function syncFromAPI() {
       const liveItems = inplayRes.data.results || [];
       allEvents.push(...liveItems);
       liveItems.forEach(ev => liveEventIds.add(String(ev.id)));
-    } catch (e) { console.error('Error fetching live:', e.message); }
+    } catch (e) { /* ignore */ }
 
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
     // Upcoming: PRIMA bet365 (così le partite nascono con id 365 per le quote), POI events (merge loghi/dati).
-    console.log(`Upcoming: scaricamento bet365/upcoming (pagine ${UPCOMING_START_PAGE}-${UPCOMING_MAX_PAGES})...`);
     try {
       let upcomingCount = 0;
       let bet365Skipped = 0;
@@ -554,10 +537,7 @@ async function syncFromAPI() {
         try {
           const res = await axios.get(`https://api.b365api.com/v1/bet365/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
           const results = res.data.results || [];
-          if (results.length === 0) {
-            console.log(`bet365/upcoming page ${page}: 0 risultati, stop`);
-            break;
-          }
+          if (results.length === 0) break;
           for (const ev of results) {
             const matchData = buildMatchDataFromBet365(ev);
             if (!matchData) {
@@ -567,78 +547,42 @@ async function syncFromAPI() {
             try {
               await saveBet365UpcomingToDb(ev);
               upcomingCount++;
-              const id = ev.id != null ? String(ev.id) : (ev.FI != null ? String(ev.FI) : '');
-              const t = ev.time ? new Date(parseInt(ev.time, 10) * 1000).toISOString() : '';
-              console.log(`  [bet365] id=${id} | ${ev.league?.name || ''} | ${ev.home?.name || ''} - ${ev.away?.name || ''} | ${t}`);
             } catch (saveErr) {
               bet365SaveErrors++;
-              if (bet365SaveErrors <= 3) console.error(`bet365/upcoming save err id=${ev.id}:`, saveErr.message);
             }
           }
-          console.log(`bet365/upcoming page ${page}: ${results.length} risultati → salvati totali ${upcomingCount}`);
-          if (results.length < 50) {
-            console.log(`bet365/upcoming page ${page}: fine risultati (<50), stop`);
-            break;
-          }
+          if (results.length < 50) break;
         } catch (pageErr) {
-          console.error(`Bet365 upcoming page ${page} (request):`, pageErr.message);
           if (page === UPCOMING_START_PAGE) break;
-          console.log(`Bet365 upcoming: proseguo con page ${page + 1}`);
         }
       }
-      console.log(`Upcoming (bet365 FI): ${upcomingCount} partite, ${bet365Skipped} scartate, ${bet365SaveErrors} errori save`);
     } catch (e) {
       console.error('Bet365 upcoming:', e.message);
     }
 
     // Poi events/upcoming: merge su partite già create da bet365 (aggiorna loghi/dati, mantiene id 365).
-    console.log(`Upcoming: scaricamento events/upcoming (pagine ${UPCOMING_START_PAGE}-${UPCOMING_MAX_PAGES})...`);
     try {
       let saved = 0;
-      let skippedNoTime = 0;
-      let skippedNoId = 0;
-      let saveErrors = 0;
       for (let page = UPCOMING_START_PAGE; page <= UPCOMING_MAX_PAGES; page++) {
         await wait(400);
         try {
           const res = await axios.get(`https://api.b365api.com/v1/events/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
           const results = res.data.results || [];
-          if (results.length === 0) {
-            console.log(`events/upcoming page ${page}: 0 risultati, stop`);
-            break;
-          }
+          if (results.length === 0) break;
           for (const ev of results) {
-            if (!ev.time) {
-              skippedNoTime++;
-              continue;
-            }
+            if (!ev.time) continue;
             const eid = ev.id != null ? String(ev.id) : '';
-            if (!eid) {
-              skippedNoId++;
-              continue;
-            }
+            if (!eid) continue;
             try {
               await saveEventToDb(ev);
               saved++;
-              const t = ev.time ? new Date(parseInt(ev.time, 10) * 1000).toISOString() : '';
-              console.log(`  [events] id=${eid} | ${ev.league?.name || ''} | ${ev.home?.name || ''} - ${ev.away?.name || ''} | ${t}`);
-            } catch (saveErr) {
-              saveErrors++;
-              if (saveErrors <= 3) console.error(`events/upcoming save err id=${eid}:`, saveErr.message);
-            }
+            } catch (saveErr) { /* ignore */ }
           }
-          console.log(`events/upcoming page ${page}: ${results.length} risultati → salvati totali ${saved}`);
-          if (results.length < 50) {
-            console.log(`events/upcoming page ${page}: fine risultati (<50), stop`);
-            break;
-          }
+          if (results.length < 50) break;
         } catch (pageErr) {
-          console.error(`Events upcoming page ${page} (request):`, pageErr.message);
           if (page === UPCOMING_START_PAGE) break;
-          console.log(`Events upcoming: proseguo con page ${page + 1}`);
         }
       }
-      console.log(`Upcoming (events/upcoming): ${saved} salvati, ${skippedNoTime} senza time, ${skippedNoId} senza id, ${saveErrors} errori save`);
     } catch (e) {
       console.error('Events upcoming:', e.message);
     }
@@ -667,9 +611,8 @@ async function syncFromAPI() {
         totalLogosFilled += batchFilled;
         if (withFi.length < SCHEDULED_LOGOS_BATCH) break;
       }
-      if (totalLogosFilled > 0) console.log(`Loghi programmate: aggiornati ${totalLogosFilled} (bet365/result + event/view)`);
     } catch (e) {
-      console.error('Scheduled logos:', e.message);
+      // Scheduled logos: silent fail
     }
 
     // Ended: oggi e ieri — sia UTC sia ora Italia (Europe/Rome)
@@ -694,11 +637,9 @@ async function syncFromAPI() {
           dayTotal += ended.length;
           if (ended.length < 50) break;
         } catch (e) {
-          if (page === 1) console.error('Error fetching ended day=', day, e.message);
           break;
         }
       }
-      if (dayTotal > 0) console.log(`Ended day=${day}: ${dayTotal} eventi`);
     }
 
     // Ended per leghe prioritarie (Serie A ecc.) — oggi e ieri
@@ -712,10 +653,7 @@ async function syncFromAPI() {
           await wait(250);
           const res = await axios.get(`https://api.b365api.com/v1/events/ended?sport_id=1&token=${TOKEN}&day=${day}&league_id=${leagueId}`);
           const list = res.data.results || [];
-          if (list.length > 0) {
-            allEvents.push(...list);
-            console.log(`Ended league ${leagueId} (${daysAgo}d fa): ${list.length} eventi`);
-          }
+          if (list.length > 0) allEvents.push(...list);
         } catch (e) { /* ignore */ }
       }
     }
@@ -743,7 +681,7 @@ async function syncFromAPI() {
     for (const m of staleLive) {
       if (m.eventId) {
         const updated = await fetchAndSaveFinishedMatch(m.eventId);
-        if (updated) console.log(`Recuperato risultato finale: ${m.homeTeam?.name} - ${m.awayTeam?.name}`);
+        if (updated) { /* ok */ }
         await new Promise(r => setTimeout(r, 400));
       }
     }
@@ -761,8 +699,6 @@ async function syncFromAPI() {
         await new Promise(r => setTimeout(r, 320));
       }
     }
-    if (finishedRecent.length > 0) console.log(`Refresh risultati: ${finishedRecent.length} partite (oggi+ieri)`);
-
     // Recupero risultati mancanti: partite SCHEDULED con orario già passato (oggi/ieri, non restituite da events/ended)
     const pastThreshold = new Date(Date.now() - 2 * 60 * 60 * 1000);
     const scheduledPast = await Match.find({
@@ -773,13 +709,10 @@ async function syncFromAPI() {
     for (const m of scheduledPast) {
       if (m.eventId) {
         const updated = await fetchAndSaveFinishedMatch(m.eventId);
-        if (updated) console.log(`Recuperato risultato (bet365/result): ${m.homeTeam?.name} - ${m.awayTeam?.name}`);
+        if (updated) { /* ok */ }
         await new Promise(r => setTimeout(r, 350));
       }
     }
-    if (scheduledPast.length > 0) console.log(`Risultati mancanti: ${scheduledPast.length} partite controllate`);
-
-    console.log(`Full sync: ${allEvents.length} events`);
     for (const ev of allEvents) await saveEventToDb(ev);
 
     // Dopo la full sync aggiorna i client WebSocket con uno snapshot completo
@@ -824,10 +757,9 @@ async function syncFromAPI() {
             updated++;
           }
         }
-        if (updated > 0) console.log(`Bet365 FI: aggiornati ${updated} match per quote prematch`);
       }
     } catch (e) {
-      console.error('Bet365 upcoming (FI map pagine):', e.message);
+      // FI map: silent
     }
 
     // Pre-compila quote prematch per partite in programma senza odds (così compaiono in lista)
@@ -870,9 +802,8 @@ async function syncFromAPI() {
           }
           await wait(380);
         }
-        if (oddsFilled > 0) console.log(`Quote prematch: pre-compilate ${oddsFilled} partite`);
       } catch (e) {
-        console.error('Quote prematch prefill:', e.message);
+        // Quote prefill: silent
       }
     }
   } catch (err) {
@@ -1590,7 +1521,6 @@ app.get('/api/match/:id/odds', async (req, res) => {
 // Sync Endpoint for Vercel Cron
 app.get('/api/sync', async (req, res) => {
   try {
-    console.log('Manual/Cron sync triggered');
     await syncFromAPI();
     res.json({ message: 'Sync completed' });
   } catch (err) {
@@ -1623,24 +1553,8 @@ if (require('fs').existsSync(distPath)) {
 
 if (require.main === module) {
   const server = http.createServer(app);
-
-  io = new SocketIOServer(server, {
-    cors: {
-      origin: '*',
-      methods: ['GET', 'POST']
-    }
-  });
-
-  io.on('connection', (socket) => {
-    console.log('WebSocket client connected:', socket.id);
-    // Invia subito lo snapshot corrente delle partite al nuovo client
-    emitMatchesSnapshot().catch(() => {});
-  });
-
   server
-    .listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
-    })
+    .listen(PORT, () => {})
     .on('error', (err) => {
       console.error('Server failed to start:', err);
     });

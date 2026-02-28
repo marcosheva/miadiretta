@@ -24,47 +24,31 @@ async function syncMatches() {
 
   try {
     await mongoose.connect(MONGODB_URI);
-    console.log('Connected to MongoDB for syncing');
 
     const allEvents = [];
     const liveEventIds = new Set();
 
-    // 1. Fetch In-Play Matches (Generic Endpoint for better Metadata)
-    console.log('Fetching live matches (Generic)...');
     try {
       const inplayRes = await axios.get(`https://api.b365api.com/v1/events/inplay?sport_id=1&token=${TOKEN}`);
       const liveItems = inplayRes.data.results || [];
       allEvents.push(...liveItems);
       liveItems.forEach(ev => liveEventIds.add(ev.id));
-      console.log(`Found ${liveItems.length} live matches`);
-    } catch (e) { console.error('Error fetching live matches:', e.message); }
+    } catch (e) { /* ignore */ }
 
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-    // 2. Fetch Upcoming Matches (Generic Endpoint - Deep Sync)
-    console.log('Fetching upcoming matches (Deep synchronization)...');
-    const MAX_PAGES = 60; 
+    const MAX_PAGES = 60;
     for (let page = 1; page <= MAX_PAGES; page++) {
       try {
-        await wait(1000); // Wait 1s between pages
+        await wait(1000);
         const upcomingRes = await axios.get(`https://api.b365api.com/v1/events/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
         const results = upcomingRes.data.results || [];
-        
-        if (results.length === 0) {
-          console.log(`Page ${page}: No more results.`);
-          break;
-        }
-
+        if (results.length === 0) break;
         allEvents.push(...results);
-        console.log(`Page ${page}: Added ${results.length} matches (Total events so far: ${allEvents.length})`);
       } catch (e) {
-        console.error(`Error fetching upcoming page ${page}:`, e.message);
-        await wait(5000); // Wait longer on error
+        await wait(5000);
       }
     }
-
-    // 3. Fetch Ended: oggi e ieri (UTC + Europe/Rome)
-    console.log('Fetching ended matches (today + yesterday, UTC + Rome, up to 100 pages/day)...');
     const ENDED_DAYS_BACK = 2; // 0 = oggi, 1 = ieri
     const ENDED_MAX_PAGES_PER_DAY = 100;
     const daysToRequest = new Set();
@@ -86,25 +70,18 @@ async function syncMatches() {
           dayTotal += endedItems.length;
           if (endedItems.length < 50) break;
         } catch (e) {
-          console.error('Error fetching ended day=', day, e.message);
           break;
         }
       }
-      if (dayTotal > 0) console.log(`Ended day=${day}: ${dayTotal} matches`);
     }
 
-    // 4. Handle status transitions: Find matches in DB that are LIVE but no longer in liveEventIds
-    console.log('Checking for matches that should be marked as finished...');
     const dbLiveMatches = await Match.find({ status: 'LIVE' });
     for (const dbMatch of dbLiveMatches) {
       if (dbMatch.eventId && !liveEventIds.has(dbMatch.eventId)) {
-        console.log(`Match ${dbMatch.homeTeam.name} vs ${dbMatch.awayTeam.name} is no longer live. Marking as FINISHED.`);
         dbMatch.status = 'FINISHED';
         await dbMatch.save();
       }
     }
-
-    console.log(`Processing total ${allEvents.length} events...`);
 
     for (const ev of allEvents) {
       if (!ev.time) continue;
@@ -150,8 +127,6 @@ async function syncMatches() {
       );
     }
 
-    // Assegna bet365FixtureId (FI) alle partite senza, così le quote prematch funzionano
-    console.log('Building bet365 FI map for prematch odds...');
     const fiByKey = new Map();
     for (let page = 1; page <= 20; page++) {
       try {
@@ -171,7 +146,6 @@ async function syncMatches() {
         }
         if (list.length < 50) break;
       } catch (e) {
-        console.error('Error fetching bet365/upcoming for FI map:', e.message);
         break;
       }
     }
@@ -194,10 +168,8 @@ async function syncMatches() {
           updated++;
         }
       }
-      if (updated > 0) console.log(`Bet365 FI: aggiornati ${updated} match per quote prematch`);
     }
 
-    console.log('Sync completed successfully');
     process.exit(0);
   } catch (err) {
     console.error('Sync error:', err.message);
