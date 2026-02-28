@@ -62,7 +62,7 @@ app.use((req, res, next) => {
 });
 app.use(cors({
   origin: (origin, cb) => {
-    if (isOriginAllowed(origin)) return cb(null, true);
+    if (origin && isOriginAllowed(origin)) return cb(null, origin);
     return cb(null, false);
   },
   credentials: false,
@@ -495,6 +495,8 @@ async function syncLiveOnly() {
 
     for (const ev of liveItems) await saveEventToDb(ev);
 
+    if (liveItems.length > 0) console.log(`Live: aggiornate ${liveItems.length} partite`);
+
     // Dopo aver aggiornato il DB, invia snapshot via WebSocket (se attivo)
     await emitMatchesSnapshot();
   } catch (e) {
@@ -556,6 +558,7 @@ async function syncFromAPI() {
           if (page === UPCOMING_START_PAGE) break;
         }
       }
+      console.log(`bet365: caricate ${upcomingCount} partite`);
     } catch (e) {
       console.error('Bet365 upcoming:', e.message);
     }
@@ -583,6 +586,7 @@ async function syncFromAPI() {
           if (page === UPCOMING_START_PAGE) break;
         }
       }
+      console.log(`events: aggiornate ${saved} partite`);
     } catch (e) {
       console.error('Events upcoming:', e.message);
     }
@@ -715,6 +719,9 @@ async function syncFromAPI() {
     }
     for (const ev of allEvents) await saveEventToDb(ev);
 
+    const totalInDb = await Match.countDocuments();
+    console.log(`Sync: ${allEvents.length} eventi processati, ${totalInDb} partite totali in DB`);
+
     // Dopo la full sync aggiorna i client WebSocket con uno snapshot completo
     await emitMatchesSnapshot();
 
@@ -757,6 +764,7 @@ async function syncFromAPI() {
             updated++;
           }
         }
+        if (updated > 0) console.log(`Bet365 FI: ${updated} partite con id 365 assegnato`);
       }
     } catch (e) {
       // FI map: silent
@@ -802,6 +810,7 @@ async function syncFromAPI() {
           }
           await wait(380);
         }
+        if (oddsFilled > 0) console.log(`Quote: pre-compilate ${oddsFilled} partite`);
       } catch (e) {
         // Quote prefill: silent
       }
@@ -899,7 +908,7 @@ app.get('/api/leagues', async (req, res) => {
     ]);
     res.json(leagues || []);
   } catch (err) {
-    res.status(500).json({ message: err.message || 'Errore leagues' });
+    res.json([]);
   }
 });
 
