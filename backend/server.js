@@ -881,24 +881,25 @@ app.get('/api/matches', async (req, res) => {
 app.get('/api/leagues', async (req, res) => {
   try {
     const leagues = await Match.aggregate([
+      { $match: { league: { $exists: true, $nin: [null, ''] }, country: { $exists: true, $nin: [null, ''] } } },
       {
         $group: {
-          _id: { country: "$country", league: "$league" },
+          _id: { country: '$country', league: '$league' },
           count: { $sum: 1 },
-          leagueId: { $first: "$leagueId" }
+          leagueId: { $first: '$leagueId' }
         }
       },
       {
         $group: {
-          _id: "$_id.country",
-          leagues: { $push: { name: "$_id.league", count: "$count", leagueId: "$leagueId" } }
+          _id: '$_id.country',
+          leagues: { $push: { name: '$_id.league', count: '$count', leagueId: '$leagueId' } }
         }
       },
       { $sort: { _id: 1 } }
     ]);
-    res.json(leagues);
+    res.json(leagues || []);
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ message: err.message || 'Errore leagues' });
   }
 });
 
@@ -1550,6 +1551,21 @@ if (require('fs').existsSync(distPath)) {
     res.sendFile(path.join(distPath, 'index.html'));
   });
 }
+
+// Gestore errori globale: imposta CORS anche sulle risposte 500 così il browser non blocca per CORS
+app.use((err, req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && isOriginAllowed(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  } else if (!origin) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (!res.headersSent) {
+    res.status(500).json({ message: err.message || 'Errore server' });
+  }
+});
 
 if (require.main === module) {
   const server = http.createServer(app);
