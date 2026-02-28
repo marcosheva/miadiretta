@@ -47,6 +47,22 @@ function isOriginAllowed(origin) {
   return allowedOrigins.includes(origin) || isRenderOrigin(origin) || isVercelOrigin(origin) || isLocalDevOrigin(origin);
 }
 
+// CORS: imposta sempre gli header per le origini consentite (evita blocchi con cold start / errori Render)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && isOriginAllowed(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  } else if (!origin) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Max-Age', '86400');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
 app.use(cors({
   origin: (origin, cb) => {
     if (isOriginAllowed(origin)) return cb(null, true);
@@ -181,7 +197,11 @@ async function saveEventToDb(ev) {
         ...existing.toObject(),
         ...matchData
       };
-      if (existing.bet365FixtureId && !merged.bet365FixtureId) {
+      // Non sovrascrivere mai id 365: se la partita è già stata salvata da bet365/upcoming, mantieni eventId e bet365FixtureId
+      if (existing.bet365FixtureId && String(existing.bet365FixtureId).trim()) {
+        merged.bet365FixtureId = existing.bet365FixtureId;
+        merged.eventId = existing.eventId;
+      } else if (existing.bet365FixtureId && !merged.bet365FixtureId) {
         merged.bet365FixtureId = existing.bet365FixtureId;
       }
       if (existing.homeTeam?.logo && !merged.homeTeam?.logo) merged.homeTeam = { ...merged.homeTeam, logo: existing.homeTeam.logo };
@@ -240,6 +260,7 @@ function buildMatchDataFromBet365(ev) {
   const awayImgId = teamImageId(ev.away);
   return {
     eventId: id,
+    bet365FixtureId: id, // FI per prematch quote
     sport: 'Football',
     league: ev.league?.name || 'Unknown League',
     leagueId: ev.league?.id != null ? String(ev.league.id) : (ev.league_id != null ? String(ev.league_id) : undefined),
@@ -271,6 +292,8 @@ async function saveBet365UpcomingToDb(ev) {
     const existing = await Match.findOne(key);
     if (existing) {
       const merged = { ...matchData, eventId: eid };
+      // Assicura sempre bet365FixtureId (FI) per prematch quote
+      if (!merged.bet365FixtureId && eid) merged.bet365FixtureId = eid;
       // Non sovrascrivere mai loghi/id già presenti: bet365/upcoming ha id sbagliati per il CDN
       if (existing.homeTeam?.logo && String(existing.homeTeam.logo).trim()) {
         merged.homeTeam = { ...merged.homeTeam, logo: existing.homeTeam.logo, id: existing.homeTeam?.id ?? merged.homeTeam?.id };
@@ -279,11 +302,18 @@ async function saveBet365UpcomingToDb(ev) {
         merged.awayTeam = { ...merged.awayTeam, logo: existing.awayTeam.logo, id: existing.awayTeam?.id ?? merged.awayTeam?.id };
       }
       try {
-        await Match.findByIdAndUpdate(existing._id, merged);
+        await Match.findByIdAndUpdate(existing._id, { $set: merged });
         return;
       } catch (e) {
         if (isDuplicateKeyError(e)) {
-          await Match.updateOne(eventIdQuery(eid), { $set: { ...matchData, eventId: eid } });
+          // Un altro documento ha già eventId = eid (id bet365). Rimuoviamo il duplicato e aggiorniamo questo.
+          const other = await Match.findOne(eventIdQuery(eid));
+          if (other && other._id.toString() !== existing._id.toString()) {
+            await Match.deleteOne({ _id: other._id });
+            await Match.findByIdAndUpdate(existing._id, { $set: merged });
+          } else {
+            await Match.updateOne(eventIdQuery(eid), { $set: { ...matchData, eventId: eid } });
+          }
           return;
         }
         throw e;
@@ -486,9 +516,11 @@ async function syncLiveOnly() {
 
 // Sync completa: inplay + upcoming + ended (per nuove partite e risultati finiti)
 const FULL_SYNC_INTERVAL_MS = 2 * 60 * 1000; // 2 minuti (risultati ended più allineati a BetsAPI)
-// Upcoming: usiamo paginazione profonda per eventi/upcoming e bet365/upcoming.
-const UPCOMING_GENERIC_MAX_PAGES = Number.parseInt(process.env.UPCOMING_GENERIC_MAX_PAGES || '80', 10);
-const UPCOMING_BET365_MAX_PAGES = Number.parseInt(process.env.UPCOMING_BET365_MAX_PAGES || '80', 10);
+// Upcoming: range pagine (start da 1, end 60). Con UPCOMING_START_PAGE=41 si scaricano solo 41-60.
+const UPCOMING_START_PAGE = Math.max(1, Number.parseInt(process.env.UPCOMING_START_PAGE || '1', 10));
+const UPCOMING_MAX_PAGES = Math.min(100, Math.max(UPCOMING_START_PAGE, Number.parseInt(process.env.UPCOMING_MAX_PAGES || '60', 10)));
+// Quante partite in programma pre-compilare con quote prematch per sync (per mostrare quote in lista)
+const ODDS_PREFILL_MAX = Math.min(200, Math.max(0, Number.parseInt(process.env.ODDS_PREFILL_MAX || '120', 10)));
 
 async function syncFromAPI() {
   const TOKEN = process.env.BETSAPI_TOKEN;
@@ -511,57 +543,104 @@ async function syncFromAPI() {
 
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-    // Upcoming generiche (events/upcoming) senza filtro day=, scorrendo molte pagine
-    console.log('Upcoming: scaricamento events/upcoming...');
-    try {
-      let saved = 0;
-      for (let page = 1; page <= UPCOMING_GENERIC_MAX_PAGES; page++) {
-        await wait(350);
-        try {
-          const res = await axios.get(`https://api.b365api.com/v1/events/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
-          const results = res.data.results || [];
-          if (results.length === 0) break;
-          for (const ev of results) {
-            if (ev.time) {
-              await saveEventToDb(ev);
-              saved++;
-            }
-          }
-          if (results.length < 50) break;
-        } catch (pageErr) {
-          console.error(`Events upcoming page ${page}:`, pageErr.message);
-          if (page === 1) break;
-          // continua con le altre pagine
-        }
-      }
-      console.log(`Upcoming (events/upcoming): ${saved} eventi salvati/aggiornati`);
-    } catch (e) {
-      console.error('Events upcoming (pagine):', e.message);
-    }
-
-    // bet365/upcoming — FI per prematch, sempre con paginazione profonda
-    console.log('Upcoming: scaricamento bet365/upcoming...');
+    // Upcoming: PRIMA bet365 (così le partite nascono con id 365 per le quote), POI events (merge loghi/dati).
+    console.log(`Upcoming: scaricamento bet365/upcoming (pagine ${UPCOMING_START_PAGE}-${UPCOMING_MAX_PAGES})...`);
     try {
       let upcomingCount = 0;
-      for (let page = 1; page <= UPCOMING_BET365_MAX_PAGES; page++) {
-        await wait(400);
+      let bet365Skipped = 0;
+      let bet365SaveErrors = 0;
+      for (let page = UPCOMING_START_PAGE; page <= UPCOMING_MAX_PAGES; page++) {
+        await wait(450);
         try {
           const res = await axios.get(`https://api.b365api.com/v1/bet365/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
           const results = res.data.results || [];
-          if (results.length === 0) break;
-          for (const ev of results) {
-            await saveBet365UpcomingToDb(ev);
-            upcomingCount++;
+          if (results.length === 0) {
+            console.log(`bet365/upcoming page ${page}: 0 risultati, stop`);
+            break;
           }
-          if (results.length < 50) break;
+          for (const ev of results) {
+            const matchData = buildMatchDataFromBet365(ev);
+            if (!matchData) {
+              bet365Skipped++;
+              continue;
+            }
+            try {
+              await saveBet365UpcomingToDb(ev);
+              upcomingCount++;
+              const id = ev.id != null ? String(ev.id) : (ev.FI != null ? String(ev.FI) : '');
+              const t = ev.time ? new Date(parseInt(ev.time, 10) * 1000).toISOString() : '';
+              console.log(`  [bet365] id=${id} | ${ev.league?.name || ''} | ${ev.home?.name || ''} - ${ev.away?.name || ''} | ${t}`);
+            } catch (saveErr) {
+              bet365SaveErrors++;
+              if (bet365SaveErrors <= 3) console.error(`bet365/upcoming save err id=${ev.id}:`, saveErr.message);
+            }
+          }
+          console.log(`bet365/upcoming page ${page}: ${results.length} risultati → salvati totali ${upcomingCount}`);
+          if (results.length < 50) {
+            console.log(`bet365/upcoming page ${page}: fine risultati (<50), stop`);
+            break;
+          }
         } catch (pageErr) {
-          console.error(`Bet365 upcoming page ${page}:`, pageErr.message);
-          if (page === 1) break;
+          console.error(`Bet365 upcoming page ${page} (request):`, pageErr.message);
+          if (page === UPCOMING_START_PAGE) break;
+          console.log(`Bet365 upcoming: proseguo con page ${page + 1}`);
         }
       }
-      console.log(`Upcoming (bet365 FI): ${upcomingCount} partite`);
+      console.log(`Upcoming (bet365 FI): ${upcomingCount} partite, ${bet365Skipped} scartate, ${bet365SaveErrors} errori save`);
     } catch (e) {
-      console.error('Bet365 upcoming (pagine):', e.message);
+      console.error('Bet365 upcoming:', e.message);
+    }
+
+    // Poi events/upcoming: merge su partite già create da bet365 (aggiorna loghi/dati, mantiene id 365).
+    console.log(`Upcoming: scaricamento events/upcoming (pagine ${UPCOMING_START_PAGE}-${UPCOMING_MAX_PAGES})...`);
+    try {
+      let saved = 0;
+      let skippedNoTime = 0;
+      let skippedNoId = 0;
+      let saveErrors = 0;
+      for (let page = UPCOMING_START_PAGE; page <= UPCOMING_MAX_PAGES; page++) {
+        await wait(400);
+        try {
+          const res = await axios.get(`https://api.b365api.com/v1/events/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
+          const results = res.data.results || [];
+          if (results.length === 0) {
+            console.log(`events/upcoming page ${page}: 0 risultati, stop`);
+            break;
+          }
+          for (const ev of results) {
+            if (!ev.time) {
+              skippedNoTime++;
+              continue;
+            }
+            const eid = ev.id != null ? String(ev.id) : '';
+            if (!eid) {
+              skippedNoId++;
+              continue;
+            }
+            try {
+              await saveEventToDb(ev);
+              saved++;
+              const t = ev.time ? new Date(parseInt(ev.time, 10) * 1000).toISOString() : '';
+              console.log(`  [events] id=${eid} | ${ev.league?.name || ''} | ${ev.home?.name || ''} - ${ev.away?.name || ''} | ${t}`);
+            } catch (saveErr) {
+              saveErrors++;
+              if (saveErrors <= 3) console.error(`events/upcoming save err id=${eid}:`, saveErr.message);
+            }
+          }
+          console.log(`events/upcoming page ${page}: ${results.length} risultati → salvati totali ${saved}`);
+          if (results.length < 50) {
+            console.log(`events/upcoming page ${page}: fine risultati (<50), stop`);
+            break;
+          }
+        } catch (pageErr) {
+          console.error(`Events upcoming page ${page} (request):`, pageErr.message);
+          if (page === UPCOMING_START_PAGE) break;
+          console.log(`Events upcoming: proseguo con page ${page + 1}`);
+        }
+      }
+      console.log(`Upcoming (events/upcoming): ${saved} salvati, ${skippedNoTime} senza time, ${skippedNoId} senza id, ${saveErrors} errori save`);
+    } catch (e) {
+      console.error('Events upcoming:', e.message);
     }
 
     // Partite in programma: aggiorna loghi in automatico (più batch per sync così si coprono tutte)
@@ -706,10 +785,10 @@ async function syncFromAPI() {
     // Dopo la full sync aggiorna i client WebSocket con uno snapshot completo
     await emitMatchesSnapshot();
 
-    // Mappa bet365 FI per match che ancora ne sono privi (pagina-based, come nella sync completa).
+    // Mappa bet365 FI per match che ancora ne sono privi (stesse pagine della sync upcoming).
     try {
       const fiByKey = new Map();
-      for (let page = 1; page <= 20; page++) {
+      for (let page = UPCOMING_START_PAGE; page <= UPCOMING_MAX_PAGES; page++) {
         await wait(400);
         const b365Res = await axios.get(`https://api.b365api.com/v1/bet365/upcoming?sport_id=1&token=${TOKEN}&page=${page}`);
         const list = b365Res.data.results || [];
@@ -749,6 +828,52 @@ async function syncFromAPI() {
       }
     } catch (e) {
       console.error('Bet365 upcoming (FI map pagine):', e.message);
+    }
+
+    // Pre-compila quote prematch per partite in programma senza odds (così compaiono in lista)
+    if (ODDS_PREFILL_MAX > 0) {
+      try {
+        const withoutOdds = await Match.find({
+          status: 'SCHEDULED',
+          $and: [
+            { $or: [
+              { bet365FixtureId: { $exists: true, $nin: [null, ''] } },
+              { eventId: { $exists: true, $nin: [null, ''] } }
+            ]},
+            { $or: [
+              { odds: { $exists: false } },
+              { 'odds.home': null },
+              { 'odds.draw': null },
+              { 'odds.away': null }
+            ]}
+          ]
+        }).sort({ startTime: 1 }).limit(ODDS_PREFILL_MAX).lean();
+        let oddsFilled = 0;
+        for (const m of withoutOdds) {
+          const fi = (m.bet365FixtureId && String(m.bet365FixtureId).trim()) || m.eventId;
+          if (!fi) continue;
+          let normalized = { main: null, overUnder25: null, btts: null };
+          for (const version of ['v4', 'v3']) {
+            try {
+              const apiRes = await axios.get(`https://api.b365api.com/${version}/bet365/prematch?token=${TOKEN}&FI=${fi}`);
+              normalized = normalizeOddsFromPrematch(apiRes.data);
+              if (normalized.main || normalized.overUnder25 || normalized.btts) break;
+            } catch (e) { /* ignore */ }
+          }
+          if (normalized.main || normalized.overUnder25 || normalized.btts) {
+            const toSet = {};
+            if (normalized.main) toSet.odds = { home: normalized.main['1'], draw: normalized.main['X'], away: normalized.main['2'] };
+            if (normalized.overUnder25) toSet.oddsOverUnder25 = { over: normalized.overUnder25.over, under: normalized.overUnder25.under };
+            if (normalized.btts) toSet.oddsBtts = { yes: normalized.btts.yes, no: normalized.btts.no };
+            await Match.updateOne({ _id: m._id }, { $set: toSet });
+            oddsFilled++;
+          }
+          await wait(380);
+        }
+        if (oddsFilled > 0) console.log(`Quote prematch: pre-compilate ${oddsFilled} partite`);
+      } catch (e) {
+        console.error('Quote prematch prefill:', e.message);
+      }
     }
   } catch (err) {
     console.error('Full sync error:', err.message);
@@ -1137,6 +1262,22 @@ function normalizeOddsFromBetsAPI(data) {
   return out;
 }
 
+// Estrae 1X2 da array piatto tipo v3 (NA "1"/"X"/"2" o "Home"/"Draw"/"Away", OD)
+function extractMainFromFlatList(arr) {
+  if (!Array.isArray(arr)) return null;
+  let one = null, draw = null, two = null;
+  for (const o of arr) {
+    if (!o || typeof o !== 'object') continue;
+    const na = String(o.NA ?? o.name ?? o.header ?? '').trim();
+    const od = o.OD ?? o.odds ?? o.odd;
+    if (/^1$|home|casa/i.test(na)) one = od;
+    else if (/^x$|draw|pareggio/i.test(na)) draw = od;
+    else if (/^2$|away|trasferta/i.test(na)) two = od;
+  }
+  if (one != null || draw != null || two != null) return { 1: toOddVal(one), X: toOddVal(draw), 2: toOddVal(two) };
+  return null;
+}
+
 // Estrae Over/Under 2.5 da array piatto tipo v3 (PA con NA "Over 2.5" / "Under 2.5", OD)
 function extractOverUnder25FromFlatList(arr) {
   if (!Array.isArray(arr)) return null;
@@ -1152,17 +1293,49 @@ function extractOverUnder25FromFlatList(arr) {
   return null;
 }
 
+// Estrae Gol/NoGol (BTTS) da array piatto tipo v3 (NA "Yes"/"No" o "GG"/"NG", OD)
+function extractBttsFromFlatList(arr) {
+  if (!Array.isArray(arr)) return null;
+  let yes = null, no = null;
+  for (const o of arr) {
+    if (!o || typeof o !== 'object') continue;
+    const na = String(o.NA ?? o.name ?? o.header ?? '').trim();
+    const od = o.OD ?? o.odds ?? o.odd;
+    if (/^yes$|^gg$|gol\s*sì/i.test(na)) yes = od;
+    else if (/^no$|^ng$|no\s*gol/i.test(na)) no = od;
+  }
+  if (yes != null || no != null) return { yes: toOddVal(yes), no: toOddVal(no) };
+  return null;
+}
+
 // Quote da bet365 prematch (v4/v3) — risultati con asian_lines, main, o lista piatta MG/MA/PA
 function normalizeOddsFromPrematch(data) {
   const out = { main: null, overUnder25: null, btts: null };
   if (!data) return out;
 
-  // v3: risposta può essere array di oggetti { type, NA, OD } (mercato 1_3 = Over/Under 2.5)
+  // v3: risposta può essere array di oggetti { type, NA, OD } — 1_1 (1X2), 1_3 (Over/Under 2.5), 1_8 (Gol/NoGol)
   const flat = data.results ?? data.events ?? data.pre_match ?? data;
   const flatArr = Array.isArray(flat) ? flat : (flat && typeof flat === 'object' && !Array.isArray(flat) ? Object.values(flat) : []);
   if (flatArr.length > 0) {
+    const mainFlat = extractMainFromFlatList(flatArr);
+    if (mainFlat) out.main = mainFlat;
     const ou = extractOverUnder25FromFlatList(flatArr);
     if (ou) out.overUnder25 = ou;
+    const bttsFlat = extractBttsFromFlatList(flatArr);
+    if (bttsFlat) out.btts = bttsFlat;
+    // Risposta con mercati tipo { type: "1_1", PA: [ { NA, OD } ] }: uniamo tutti i PA e riestraiamo
+    const allPa = [];
+    for (const it of flatArr) {
+      if (it && typeof it === 'object') {
+        const pa = it.PA ?? it.participants ?? it.odds;
+        if (Array.isArray(pa)) allPa.push(...pa); else if (pa && typeof pa === 'object') allPa.push(...Object.values(pa));
+      }
+    }
+    if (allPa.length > 0) {
+      if (!out.main) { const m = extractMainFromFlatList(allPa); if (m) out.main = m; }
+      if (!out.overUnder25) { const o = extractOverUnder25FromFlatList(allPa); if (o) out.overUnder25 = o; }
+      if (!out.btts) { const b = extractBttsFromFlatList(allPa); if (b) out.btts = b; }
+    }
     // Se results è array di array (un livello più interno)
     if (!out.overUnder25 && flatArr[0] && Array.isArray(flatArr[0])) {
       for (const sub of flatArr) {
